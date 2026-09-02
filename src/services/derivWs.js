@@ -361,4 +361,43 @@ export const parseDerivOAuthParams = (queryString = typeof window !== 'undefined
   return accounts;
 };
 
+/**
+ * Step 4: Exchange Authorization Code for Access Token via Backend / Serverless Endpoint
+ */
+export const exchangeCodeForToken = async ({ code, codeVerifier, clientId, redirectUri }) => {
+  try {
+    const payload = {
+      code,
+      code_verifier: codeVerifier || sessionStorage.getItem('pkce_code_verifier'),
+      client_id: clientId || '34hP1yTdG6Hc7grRIWQWH',
+      redirect_uri: redirectUri || (typeof window !== 'undefined' ? window.location.origin + '/' : 'https://neptune-trading-bot.vercel.app/')
+    };
+
+    const res = await fetch('/api/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    
+    // Clear PKCE storage after exchange
+    sessionStorage.removeItem('pkce_code_verifier');
+    sessionStorage.removeItem('oauth_state');
+
+    if (!res.ok) {
+      throw new Error(data.error_description || data.error || 'Token exchange failed');
+    }
+
+    return data; // { access_token, expires_in, token_type }
+  } catch (err) {
+    sessionStorage.removeItem('pkce_code_verifier');
+    sessionStorage.removeItem('oauth_state');
+    throw err;
+  }
+};
+
+
 

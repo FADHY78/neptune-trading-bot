@@ -8,7 +8,7 @@ import { StrategyDocs } from './components/StrategyDocs.jsx';
 import { AboutTab } from './components/AboutTab.jsx';
 import { RiskModal } from './components/RiskModal.jsx';
 import { loadStoredConfig, saveStoredConfig, isDisclaimerAccepted, setDisclaimerAccepted } from './services/storage.js';
-import { derivApi, getDerivOAuthUrl, parseDerivOAuthParams } from './services/derivWs.js';
+import { derivApi, getDerivOAuthUrl, parseDerivOAuthParams, exchangeCodeForToken } from './services/derivWs.js';
 import { botEngine } from './services/botEngine.js';
 
 export function App() {
@@ -35,15 +35,54 @@ export function App() {
     saveStoredConfig(newConfig);
   };
 
-  // Deriv OAuth Redirect Token Parser
+  // Deriv OAuth Redirect Token / PKCE Code Handler
   useEffect(() => {
-    const accounts = parseDerivOAuthParams();
-    if (accounts.length > 0) {
+    const handleRedirect = async () => {
+      const accounts = parseDerivOAuthParams();
+      if (accounts.length === 0) return;
+
       const primary = accounts[0];
+
+      // Handle PKCE Code Flow
+      if (primary.isCodeFlow) {
+        if (!primary.validState) {
+          botEngine.log('Deriv OAuth Error: State mismatch detected (CSRF protection)', 'alert');
+          return;
+        }
+
+        botEngine.log('Deriv OAuth Code received. Exchanging code for access token...', 'info');
+        window.history.replaceState({}, document.title, window.location.pathname);
+
+        setWsState(prev => ({ ...prev, isConnecting: true }));
+        try {
+          const tokenData = await exchangeCodeForToken({
+            code: primary.code,
+            clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH',
+            redirectUri: window.location.origin + '/'
+          });
+
+          const token = tokenData.access_token;
+          const updatedConfig = {
+            ...config,
+            apiToken: token,
+            simulationMode: false
+          };
+          setConfig(updatedConfig);
+          saveStoredConfig(updatedConfig);
+
+          await derivApi.connect(token, config.appId || '34hP1yTdG6Hc7grRIWQWH');
+          botEngine.log('Deriv OAuth PKCE Login successful!', 'won');
+        } catch (e) {
+          botEngine.log(`Deriv OAuth PKCE Error: ${e.message}`, 'alert');
+          setWsState(prev => ({ ...prev, isConnecting: false }));
+        }
+        return;
+      }
+
+      // Handle Direct Token Flow
       const token = primary.token;
       const currency = primary.currency || 'USD';
 
-      // Clean up URL parameters cleanly
       window.history.replaceState({}, document.title, window.location.pathname);
 
       const updatedConfig = {
@@ -62,7 +101,9 @@ export function App() {
         botEngine.log(`Deriv OAuth Authorization Error: ${e.message}`, 'alert');
         setWsState(prev => ({ ...prev, isConnecting: false }));
       });
-    }
+    };
+
+    handleRedirect();
   }, []);
 
   const handleDerivOAuthLogin = async () => {
