@@ -300,6 +300,9 @@ export async function handleOAuthCallback(req, res, urlObj) {
             balance: Number(a.balance || 0),
             disabled: false
           }));
+        } else if (uData && uData.sub) {
+          // Store user identity sub even if no trading accounts listed yet
+          accounts = [{ loginid: uData.sub, currency: 'USD', isVirtual: false, balance: 0, disabled: false }];
         }
       }
     } catch (uErr) {
@@ -390,6 +393,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
 
     // Prioritize Virtual/Demo account
     accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
+    // Use VRTC_DEMO placeholder only if ALL lookups failed
     const activeAcc = accounts[0] || {
       loginid: 'VRTC_DEMO',
       currency: 'USD',
@@ -654,8 +658,9 @@ export async function handleAuthStatus(req, res) {
       }
     }
 
-    // If no real trading accounts found, clear ghost session and return unauthenticated
-    if (!session.accounts || session.accounts.length === 0 || !session.activeLoginid || session.activeLoginid === 'VRTC_DEMO' || session.activeLoginid === 'loginids') {
+    // If no real trading accounts found but we have a valid OAuth session, still return authenticated
+    if (!session.accounts || session.accounts.length === 0 || !session.activeLoginid || session.activeLoginid === 'loginids') {
+      // Return unauthenticated only if there is truly no session at all
       res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', '', { maxAge: 0 }));
       res.statusCode = 200;
       res.end(JSON.stringify({
@@ -874,13 +879,19 @@ export async function handleTradeBuy(req, res) {
     const isOAuth = session.isOAuth || (session.accessToken && (session.accessToken.startsWith('ory_at_') || session.accessToken.length > 32));
 
     if (isOAuth) {
-      // OAuth 2.0 PKCE flow: Acquire short-lived OTP for the selected account
-      const otpData = await getDerivAccountOtp(session.activeLoginid, session.accessToken);
-      if (otpData && otpData.url) {
-        targetWsUrl = otpData.url;
-      }
-      if (otpData && otpData.otp) {
-        authReqPayload = { authorize: otpData.otp, req_id: 1 };
+      // OAuth 2.0 PKCE flow: Try OTP for the selected account, fallback to standard WS with bearer token
+      try {
+        const otpData = await getDerivAccountOtp(session.activeLoginid, session.accessToken);
+        if (otpData && otpData.url) {
+          targetWsUrl = otpData.url;
+        }
+        if (otpData && otpData.otp) {
+          authReqPayload = { authorize: otpData.otp, req_id: 1 };
+        }
+      } catch (otpErr) {
+        console.warn('OTP acquisition note (falling back to direct auth):', otpErr.message);
+        // Fallback: try standard WS authorize with bearer token
+        authReqPayload = { authorize: session.accessToken, req_id: 1 };
       }
     } else {
       // Direct API Token flow
