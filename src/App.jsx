@@ -70,6 +70,14 @@ export function App() {
     window.location.href = url;
   };
 
+  // Auto-connect on startup if token is present
+  useEffect(() => {
+    const accounts = parseDerivOAuthParams();
+    if (accounts.length === 0 && config.apiToken && !config.simulationMode) {
+      handleConnectDeriv();
+    }
+  }, []);
+
   // Subscribe to Bot Engine Updates
   useEffect(() => {
     const unsubscribe = botEngine.subscribe((newState) => {

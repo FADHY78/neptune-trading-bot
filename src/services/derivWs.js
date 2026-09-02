@@ -50,16 +50,19 @@ export class DerivService {
     }
   }
 
-  connect(token, appId = '1089') {
+  connect(token, appId = '34hP1yTdG6Hc7grRIWQWH') {
     return new Promise((resolve, reject) => {
-      this.appId = appId || '1089';
+      this.appId = appId || '34hP1yTdG6Hc7grRIWQWH';
       this.token = token;
 
       if (this.ws) {
         this.disconnect();
       }
 
-      const url = `wss://ws.binaryws.com/websockets/v3?app_id=${this.appId}`;
+      const isNumeric = /^\d+$/.test(String(this.appId).trim());
+      const wsAppId = isNumeric ? String(this.appId).trim() : '1089';
+
+      const url = `wss://ws.binaryws.com/websockets/v3?app_id=${wsAppId}`;
       this.ws = new WebSocket(url);
 
       this.ws.onopen = () => {

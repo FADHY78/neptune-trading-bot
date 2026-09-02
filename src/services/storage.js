@@ -2,9 +2,9 @@ const STORAGE_KEY = 'neptune_bot_config';
 const DISCLAIMER_KEY = 'neptune_disclaimer_accepted';
 
 export const DEFAULT_CONFIG = {
-  apiToken: '',
+  apiToken: 'pat_a9e587db13e86cfdad0bc1aae8af0d9cb004f1777dea2c4bed46cb69fe64977a',
   appId: '34hP1yTdG6Hc7grRIWQWH',
-  simulationMode: true,
+  simulationMode: false,
   strategyId: 'differs-combo-9',
   currency: 'USD',
   initialStake: 5,
