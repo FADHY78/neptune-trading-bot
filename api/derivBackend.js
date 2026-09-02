@@ -260,7 +260,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
     try {
       const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
         headers: {
-          'Deriv-App-ID': DERIV_WS_APP_ID,
+          'Deriv-App-ID': DERIV_APP_ID,
           'Authorization': `Bearer ${accessToken}`
         }
       });
@@ -313,6 +313,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
     // Store Session in signed HTTP-only cookie
     const sessionPayload = JSON.stringify({
       accessToken: accessToken,
+      isOAuth: true,
       activeLoginid: activeAcc.loginid,
       isVirtual: activeAcc.isVirtual,
       currency: activeAcc.currency,
@@ -368,7 +369,7 @@ export async function handleAuthStatus(req, res) {
     try {
       const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
         headers: {
-          'Deriv-App-ID': DERIV_WS_APP_ID,
+          'Deriv-App-ID': DERIV_APP_ID,
           'Authorization': `Bearer ${session.accessToken}`
         }
       });
@@ -643,18 +644,16 @@ export async function handleTradeBuy(req, res) {
     let targetWsUrl = DERIV_WS_URL;
     let authReqPayload = null;
 
-    if (session.accessToken && session.accessToken.length > 128) {
+    const isOAuth = session.isOAuth || (session.accessToken && (session.accessToken.startsWith('ory_at_') || session.accessToken.length > 32));
+
+    if (isOAuth) {
       // OAuth 2.0 PKCE flow: Acquire short-lived OTP for the selected account
-      try {
-        const otpData = await getDerivAccountOtp(session.activeLoginid, session.accessToken);
-        if (otpData.url) {
-          targetWsUrl = otpData.url;
-        }
-        if (otpData.otp) {
-          authReqPayload = { authorize: otpData.otp, req_id: 1 };
-        }
-      } catch (otpErr) {
-        console.warn('OTP acquisition note:', otpErr.message);
+      const otpData = await getDerivAccountOtp(session.activeLoginid, session.accessToken);
+      if (otpData && otpData.url) {
+        targetWsUrl = otpData.url;
+      }
+      if (otpData && otpData.otp) {
+        authReqPayload = { authorize: otpData.otp, req_id: 1 };
       }
     } else {
       // Direct API Token flow
@@ -776,7 +775,7 @@ export async function getDerivAccountOtp(accountId, accessToken) {
     try {
       const accRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
         headers: {
-          'Deriv-App-ID': DERIV_WS_APP_ID,
+          'Deriv-App-ID': DERIV_APP_ID,
           'Authorization': `Bearer ${accessToken}`
         }
       });
@@ -800,7 +799,7 @@ export async function getDerivAccountOtp(accountId, accessToken) {
   const otpRes = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      'Deriv-App-ID': DERIV_WS_APP_ID,
+      'Deriv-App-ID': DERIV_APP_ID,
       'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json'
     }
