@@ -11,18 +11,18 @@ export const AboutTab = () => {
         </div>
 
         <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.6', marginBottom: '14px' }}>
-          Neptune Trading Bot is a high-performance automated digit trading application designed to run seamlessly in modern Web browsers. 
-          It communicates directly with Deriv WebSocket API servers without requiring third-party intermediate backends.
+          Neptune Trading Bot is a high-performance automated digit trading application featuring zero-token browser exposure 
+          using a backend-secured Deriv OAuth 2.0 PKCE exchange, signed HTTP-only sessions, and real-time streaming architecture.
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px' }}>
           <div style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '6px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: '600', color: 'var(--accent-cyan)', marginBottom: '6px' }}>
               <Server size={14} />
-              <span>Deriv OAuth 2.0 & WebSocket</span>
+              <span>Deriv OAuth 2.0 & SSE Stream</span>
             </div>
             <code className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              OAuth: auth.deriv.com/oauth2/auth (PKCE) | WS: wss://ws.derivws.com/websockets/v3
+              PKCE: /api/deriv/oauth/start | Session: HTTP-only Cookie | Stream: /api/deriv/market/ticks (SSE)
             </code>
           </div>
 
