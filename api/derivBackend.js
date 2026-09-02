@@ -253,50 +253,83 @@ export async function handleOAuthCallback(req, res, urlObj) {
 
     const accessToken = tokenData.access_token;
 
-    // Account Discovery via Deriv Options REST API (official for OAuth 2.0 PKCE Bearer JWT)
+    // Account Discovery via Deriv Options REST API & Userinfo
     let accounts = [];
     let initialBalance = 0;
 
+    // 1. Query userinfo from auth.deriv.com
     try {
-      const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
-        headers: {
-          'Deriv-App-ID': DERIV_APP_ID,
-          'Authorization': `Bearer ${accessToken}`
-        }
+      const uRes = await fetch('https://auth.deriv.com/userinfo', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
       });
-      if (restRes.ok) {
-        const restList = await restRes.json();
-        if (Array.isArray(restList) && restList.length > 0) {
-          accounts = restList.map(a => ({
-            loginid: a.id || a.loginid,
+      if (uRes.ok) {
+        const uData = await uRes.json();
+        if (uData && Array.isArray(uData.accounts) && uData.accounts.length > 0) {
+          accounts = uData.accounts.map(a => ({
+            loginid: a.loginid || a.id,
             currency: a.currency || 'USD',
-            isVirtual: a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'),
+            isVirtual: Boolean(a.is_virtual) || String(a.loginid || a.id).startsWith('VRTC'),
             balance: Number(a.balance || 0),
             disabled: false
           }));
         }
       }
-    } catch (restErr) {
-      console.warn('Options REST accounts discovery note:', restErr.message);
+    } catch (uErr) {
+      console.warn('Userinfo lookup note:', uErr.message);
     }
 
-    // Fallback: if token is <= 128 chars, try WS authorize
-    if (accounts.length === 0 && accessToken.length <= 128) {
+    // 2. Query Options REST accounts
+    if (accounts.length === 0) {
       try {
-        const authRes = await sendDerivWsCommand({ authorize: accessToken }, 4000);
-        if (authRes?.authorize) {
-          const rawAccountList = authRes.authorize.account_list || [];
-          accounts = rawAccountList.map(a => ({
-            loginid: a.loginid,
-            currency: a.currency || 'USD',
-            isVirtual: Boolean(a.is_virtual),
-            balance: a.loginid === authRes.authorize.loginid ? authRes.authorize.balance : 0,
-            disabled: Boolean(a.is_disabled)
-          }));
-          initialBalance = authRes.authorize.balance || 0;
+        const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+          headers: {
+            'Deriv-App-ID': DERIV_APP_ID,
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        if (restRes.ok) {
+          const restList = await restRes.json();
+          if (Array.isArray(restList) && restList.length > 0) {
+            accounts = restList.map(a => ({
+              loginid: a.id || a.loginid,
+              currency: a.currency || 'USD',
+              isVirtual: a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'),
+              balance: Number(a.balance || 0),
+              disabled: false
+            }));
+          }
         }
-      } catch (wsErr) {
-        console.warn('WS accounts discovery note:', wsErr.message);
+      } catch (restErr) {
+        console.warn('Options REST accounts discovery note:', restErr.message);
+      }
+    }
+
+    // 3. If no accounts exist yet, initialize/create an Options trading account
+    if (accounts.length === 0) {
+      try {
+        const createRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+          method: 'POST',
+          headers: {
+            'Deriv-App-ID': DERIV_APP_ID,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({})
+        });
+        if (createRes.ok) {
+          const newAcc = await createRes.json();
+          if (newAcc && (newAcc.id || newAcc.loginid)) {
+            accounts = [{
+              loginid: newAcc.id || newAcc.loginid,
+              currency: newAcc.currency || 'USD',
+              isVirtual: newAcc.type === 'demo' || String(newAcc.id || newAcc.loginid).startsWith('VRTC'),
+              balance: Number(newAcc.balance || 0),
+              disabled: false
+            }];
+          }
+        }
+      } catch (cErr) {
+        console.warn('Options account creation note:', cErr.message);
       }
     }
 
@@ -374,7 +407,25 @@ export async function handleAuthStatus(req, res) {
         }
       });
       if (restRes.ok) {
-        const restList = await restRes.json();
+        let restList = await restRes.json();
+
+        // If list is empty, initialize/create options account
+        if (!Array.isArray(restList) || restList.length === 0) {
+          const cRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+            method: 'POST',
+            headers: {
+              'Deriv-App-ID': DERIV_APP_ID,
+              'Authorization': `Bearer ${session.accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({})
+          });
+          if (cRes.ok) {
+            const created = await cRes.json();
+            if (created && (created.id || created.loginid)) restList = [created];
+          }
+        }
+
         if (Array.isArray(restList) && restList.length > 0) {
           session.accounts = restList.map(a => ({
             loginid: a.id || a.loginid,
@@ -400,6 +451,37 @@ export async function handleAuthStatus(req, res) {
       }
     } catch (restErr) {
       console.warn('REST status refresh note:', restErr.message);
+    }
+
+    // 2. Query userinfo from auth.deriv.com if accounts still empty or active is VRTC_DEMO
+    if (!session.accounts || session.accounts.length === 0 || session.activeLoginid === 'VRTC_DEMO') {
+      try {
+        const uRes = await fetch('https://auth.deriv.com/userinfo', {
+          headers: { 'Authorization': `Bearer ${session.accessToken}` }
+        });
+        if (uRes.ok) {
+          const uData = await uRes.json();
+          if (uData && Array.isArray(uData.accounts) && uData.accounts.length > 0) {
+            session.accounts = uData.accounts.map(a => ({
+              loginid: a.loginid || a.id,
+              currency: a.currency || 'USD',
+              isVirtual: Boolean(a.is_virtual) || String(a.loginid || a.id).startsWith('VRTC'),
+              balance: Number(a.balance || 0),
+              disabled: false
+            }));
+            session.accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
+            const active = session.accounts.find(a => a.loginid === session.activeLoginid) || session.accounts[0];
+            session.activeLoginid = active.loginid;
+            session.isVirtual = active.isVirtual;
+            session.currency = active.currency;
+            liveBalance = active.balance || liveBalance;
+            session.balance = liveBalance;
+
+            const updatedCookie = signValue(JSON.stringify(session));
+            res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
+          }
+        }
+      } catch (uErr) {}
     }
 
     // 2. If token is standard API token (<= 128 chars), refresh via Deriv WebSocket
@@ -772,27 +854,62 @@ export async function getDerivAccountOtp(accountId, accessToken) {
 
   // If active accountId is not yet resolved or is placeholder, query options accounts
   if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
+    // 1. Try userinfo from auth.deriv.com
     try {
-      const accRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
-        headers: {
-          'Deriv-App-ID': DERIV_APP_ID,
-          'Authorization': `Bearer ${accessToken}`
-        }
+      const uRes = await fetch('https://auth.deriv.com/userinfo', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
       });
-      if (accRes.ok) {
-        const accList = await accRes.json();
-        if (Array.isArray(accList) && accList.length > 0) {
-          const demo = accList.find(a => a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'));
-          cleanAccountId = demo ? (demo.id || demo.loginid) : (accList[0].id || accList[0].loginid);
+      if (uRes.ok) {
+        const uData = await uRes.json();
+        if (uData && Array.isArray(uData.accounts) && uData.accounts.length > 0) {
+          const demo = uData.accounts.find(a => String(a.loginid || a.id).startsWith('VRTC'));
+          cleanAccountId = demo ? (demo.loginid || demo.id) : (uData.accounts[0].loginid || uData.accounts[0].id);
         }
       }
-    } catch (e) {
-      console.warn('Account resolution for OTP warning:', e.message);
+    } catch (e) {}
+
+    // 2. Try Options REST accounts
+    if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
+      try {
+        const accRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+          headers: {
+            'Deriv-App-ID': DERIV_APP_ID,
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        if (accRes.ok) {
+          let accList = await accRes.json();
+
+          // If empty, initialize/create options account
+          if (!Array.isArray(accList) || accList.length === 0) {
+            const cRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+              method: 'POST',
+              headers: {
+                'Deriv-App-ID': DERIV_APP_ID,
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({})
+            });
+            if (cRes.ok) {
+              const created = await cRes.json();
+              if (created && (created.id || created.loginid)) accList = [created];
+            }
+          }
+
+          if (Array.isArray(accList) && accList.length > 0) {
+            const demo = accList.find(a => a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'));
+            cleanAccountId = demo ? (demo.id || demo.loginid) : (accList[0].id || accList[0].loginid);
+          }
+        }
+      } catch (e) {
+        console.warn('Account resolution for OTP warning:', e.message);
+      }
     }
   }
 
   if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
-    throw new Error('Unable to resolve active Deriv trading account ID for OTP acquisition.');
+    throw new Error('No active Deriv Options trading account found. You can also paste your personal Deriv API Token in settings to trade directly.');
   }
 
   const endpoint = `https://api.derivws.com/trading/v1/options/accounts/${encodeURIComponent(cleanAccountId)}/otp`;
