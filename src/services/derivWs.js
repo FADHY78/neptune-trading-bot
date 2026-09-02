@@ -279,8 +279,10 @@ export const derivApi = new DerivService();
 /**
  * Generate Deriv OAuth 2.0 Login URL (Supports both Direct App ID and PKCE)
  */
-export const getDerivOAuthUrl = (appId = '34hP1yTdG6Hc7grRIWQWH') => {
-  return `https://oauth.deriv.com/oauth2/authorize?app_id=${appId}&l=en`;
+export const getDerivOAuthUrl = (appId = '1089') => {
+  const isNumeric = /^\d+$/.test(String(appId).trim());
+  const validAppId = isNumeric ? String(appId).trim() : '1089';
+  return `https://oauth.deriv.com/oauth2/authorize?app_id=${validAppId}&l=en`;
 };
 
 /**
