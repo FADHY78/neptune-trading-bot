@@ -536,11 +536,13 @@ export const generatePKCE = async () => {
  */
 export const getDerivOAuth2Url = async ({
   clientId = '34hP1yTdG6Hc7grRIWQWH',
-  isSignUp = false
+  isSignUp = false,
+  redirectUri = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : ''
 } = {}) => {
   const params = new URLSearchParams();
   if (isSignUp) params.set('signup', 'true');
   if (clientId && clientId !== '34hP1yTdG6Hc7grRIWQWH') params.set('client_id', clientId);
+  if (redirectUri) params.set('redirect_uri', redirectUri);
   return `/api/deriv/oauth/start${params.toString() ? `?${params.toString()}` : ''}`;
 };
 

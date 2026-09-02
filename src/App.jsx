@@ -43,8 +43,17 @@ export function App() {
   // Deriv OAuth 2.0 & Backend Session Check (Digit Atlas Architecture)
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
     const loginStatus = urlParams.get('login');
     const errorParam = urlParams.get('error');
+
+    // If Deriv redirected back to root '/' with OAuth code & state
+    if (code && state) {
+      botEngine.log('Completing Deriv OAuth PKCE handshake with backend...', 'info');
+      window.location.replace(`/api/deriv/oauth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`);
+      return;
+    }
 
     if (loginStatus === 'success') {
       botEngine.log('Deriv OAuth 2.0 login successful! Secure HTTP-only session active.', 'won');

@@ -128,11 +128,12 @@ export function handleOAuthStart(req, res, urlObj) {
 
   const isSignUp = urlObj.searchParams.get('signup') === 'true';
   const customClientId = urlObj.searchParams.get('client_id') || DERIV_APP_ID;
+  const customRedirectUri = urlObj.searchParams.get('redirect_uri') || process.env.DERIV_REDIRECT_URI;
   
   // Host detection for callback
   const protocol = req.headers['x-forwarded-proto'] || (req.connection?.encrypted ? 'https' : 'http');
   const host = req.headers['x-forwarded-host'] || req.headers.host;
-  const redirectUri = `${protocol}://${host}/callback`;
+  const redirectUri = customRedirectUri || `${protocol}://${host}/`;
 
   // Cryptographic PKCE Generation
   const verifierBytes = crypto.randomBytes(48);
