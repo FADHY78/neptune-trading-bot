@@ -50,6 +50,24 @@ export function createSetCookieHeader(name, value, { maxAge = 86400, httpOnly = 
 }
 
 /**
+ * Universal request body parser (supports Vercel pre-parsed bodies & Node streams)
+ */
+export async function getRequestBody(req) {
+  if (req.body !== undefined && req.body !== null) {
+    if (typeof req.body === 'object') return req.body;
+    try { return JSON.parse(req.body); } catch(e) { return {}; }
+  }
+  return new Promise((resolve) => {
+    let raw = '';
+    req.on('data', chunk => { raw += chunk; });
+    req.on('end', () => {
+      try { resolve(JSON.parse(raw || '{}')); } catch(e) { resolve({}); }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
+/**
  * Helper to execute a quick one-shot Deriv WebSocket command
  */
 export async function sendDerivWsCommand(requests, timeoutMs = 7000) {
@@ -102,6 +120,12 @@ export async function sendDerivWsCommand(requests, timeoutMs = 7000) {
 
 // 1. GET /api/deriv/oauth/start
 export function handleOAuthStart(req, res, urlObj) {
+  if (!urlObj) {
+    const proto = req.headers?.['x-forwarded-proto'] || (req.connection?.encrypted ? 'https' : 'http');
+    const host = req.headers?.['x-forwarded-host'] || req.headers?.host || 'localhost';
+    urlObj = new URL(req.url || '/', `${proto}://${host}`);
+  }
+
   const isSignUp = urlObj.searchParams.get('signup') === 'true';
   const customClientId = urlObj.searchParams.get('client_id') || DERIV_APP_ID;
   
@@ -146,6 +170,12 @@ export function handleOAuthStart(req, res, urlObj) {
 
 // 2. GET /callback (or /api/deriv/oauth/callback)
 export async function handleOAuthCallback(req, res, urlObj) {
+  if (!urlObj) {
+    const proto = req.headers?.['x-forwarded-proto'] || (req.connection?.encrypted ? 'https' : 'http');
+    const host = req.headers?.['x-forwarded-host'] || req.headers?.host || 'localhost';
+    urlObj = new URL(req.url || '/', `${proto}://${host}`);
+  }
+
   const code = urlObj.searchParams.get('code');
   const state = urlObj.searchParams.get('state');
   const error = urlObj.searchParams.get('error');
@@ -339,43 +369,39 @@ export async function handleAccountSwitch(req, res) {
     return;
   }
 
-  let body = '';
-  req.on('data', chunk => { body += chunk; });
-  req.on('end', async () => {
-    try {
-      const { loginid } = JSON.parse(body || '{}');
-      const session = JSON.parse(sessionRaw);
-      const target = session.accounts.find(a => a.loginid === loginid);
+  try {
+    const { loginid } = await getRequestBody(req);
+    const session = JSON.parse(sessionRaw);
+    const target = session.accounts.find(a => a.loginid === loginid);
 
-      if (!target) {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ error: 'Account not found in session account list' }));
-        return;
-      }
-
-      session.activeLoginid = target.loginid;
-      session.isVirtual = target.isVirtual;
-      session.currency = target.currency;
-      if (target.token) {
-        session.accessToken = target.token;
-      }
-
-      const updatedCookie = signValue(JSON.stringify(session));
-      res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
-      res.statusCode = 200;
-      res.end(JSON.stringify({
-        success: true,
-        activeAccount: {
-          loginid: target.loginid,
-          isVirtual: target.isVirtual,
-          currency: target.currency
-        }
-      }));
-    } catch (e) {
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: e.message }));
+    if (!target) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: 'Account not found in session account list' }));
+      return;
     }
-  });
+
+    session.activeLoginid = target.loginid;
+    session.isVirtual = target.isVirtual;
+    session.currency = target.currency;
+    if (target.token) {
+      session.accessToken = target.token;
+    }
+
+    const updatedCookie = signValue(JSON.stringify(session));
+    res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
+    res.statusCode = 200;
+    res.end(JSON.stringify({
+      success: true,
+      activeAccount: {
+        loginid: target.loginid,
+        isVirtual: target.isVirtual,
+        currency: target.currency
+      }
+    }));
+  } catch (e) {
+    res.statusCode = 500;
+    res.end(JSON.stringify({ error: e.message }));
+  }
 }
 
 // 5. POST /api/deriv/auth/logout
@@ -391,6 +417,12 @@ export function handleLogout(req, res) {
 
 // 6. GET /api/deriv/market/ticks (SSE - Server-Sent Events tick stream)
 export function handleMarketTicksSSE(req, res, urlObj) {
+  if (!urlObj) {
+    const proto = req.headers?.['x-forwarded-proto'] || (req.connection?.encrypted ? 'https' : 'http');
+    const host = req.headers?.['x-forwarded-host'] || req.headers?.host || 'localhost';
+    urlObj = new URL(req.url || '/', `${proto}://${host}`);
+  }
+
   const symbol = urlObj.searchParams.get('symbol') || '1HZ100V';
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -483,7 +515,7 @@ export function handleMarketTicksSSE(req, res, urlObj) {
 }
 
 // 7. POST /api/deriv/trade/buy (Server-side authenticated contract purchase)
-export function handleTradeBuy(req, res) {
+export async function handleTradeBuy(req, res) {
   res.setHeader('Content-Type', 'application/json');
   const cookies = parseCookies(req);
   const sessionRaw = unsignValue(cookies.deriv_access_session);
@@ -494,18 +526,15 @@ export function handleTradeBuy(req, res) {
     return;
   }
 
-  let body = '';
-  req.on('data', chunk => { body += chunk; });
-  req.on('end', async () => {
-    try {
-      const session = JSON.parse(sessionRaw);
-      const { symbol, contractType, stake, barrier, duration = 1 } = JSON.parse(body || '{}');
+  try {
+    const session = JSON.parse(sessionRaw);
+    const { symbol, contractType, stake, barrier, duration = 1 } = await getRequestBody(req);
 
-      if (!symbol || !contractType || !stake) {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ error: 'Missing required parameters (symbol, contractType, stake)' }));
-        return;
-      }
+    if (!symbol || !contractType || !stake) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: 'Missing required parameters (symbol, contractType, stake)' }));
+      return;
+    }
 
       // Open authenticated WS to Deriv to buy contract and await outcome
       const ws = new WebSocket(DERIV_WS_URL);
@@ -600,5 +629,4 @@ export function handleTradeBuy(req, res) {
       res.statusCode = 500;
       res.end(JSON.stringify({ error: err.message }));
     }
-  });
 }
