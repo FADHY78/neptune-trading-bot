@@ -522,6 +522,19 @@ export async function handleAuthStatus(req, res) {
       }
     }
 
+    // If no real trading accounts found, clear ghost session and return unauthenticated
+    if (!session.accounts || session.accounts.length === 0 || session.activeLoginid === 'VRTC_DEMO') {
+      res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', '', { maxAge: 0 }));
+      res.statusCode = 200;
+      res.end(JSON.stringify({
+        authenticated: false,
+        activeAccount: null,
+        accounts: [],
+        message: 'No active trading account linked to this OAuth session. Please log in or connect with your Deriv API Token.'
+      }));
+      return;
+    }
+
     res.statusCode = 200;
     res.end(JSON.stringify({
       authenticated: true,
