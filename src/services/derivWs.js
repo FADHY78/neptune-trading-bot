@@ -108,6 +108,46 @@ export class DerivService {
   }
 
   /**
+   * Connect browser to Deriv WebSocket for zero-latency public market feed (ticks, active symbols)
+   */
+  connectPublicWs() {
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      const url = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
+      this.ws = new WebSocket(url);
+
+      this.ws.onopen = () => {
+        this.connected = true;
+        this.emit('onConnect', { appId: '1089', publicFeed: true });
+        this.fetchActiveSymbols();
+        resolve();
+      };
+
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          this.handleMessage(data);
+        } catch (e) {
+          console.error('Error handling Deriv WS message:', e);
+        }
+      };
+
+      this.ws.onclose = () => {
+        if (this.isServerSession) {
+          setTimeout(() => this.connectPublicWs(), 3000);
+        }
+      };
+
+      this.ws.onerror = (err) => {
+        console.warn('Public Deriv WS feed notice:', err);
+      };
+    });
+  }
+
+  /**
    * Check if user is authenticated via server HTTP-only session cookie
    */
   async checkServerSession() {
@@ -132,9 +172,16 @@ export class DerivService {
           accountList: this.accountList
         });
 
-        // Connect market tick stream via SSE proxy
-        this.connectSSE();
-        this.fetchActiveSymbols();
+        this.emit('onBalance', {
+          balance: this.balance,
+          currency: this.currency
+        });
+
+        // Connect public WebSocket for real-time market ticks & active symbols
+        await this.connectPublicWs();
+
+        // Subscribe to initial active symbol ticks
+        this.subscribeTick('1HZ100V');
 
         return { authenticated: true, activeAccount: data.activeAccount, accounts: data.accounts };
       }
@@ -159,9 +206,21 @@ export class DerivService {
     this.loginid = data.activeAccount.loginid;
     this.isDemo = data.activeAccount.isVirtual;
     this.currency = data.activeAccount.currency;
+    this.balance = data.activeAccount.balance || 0;
 
-    // Refresh SSE connection
-    this.connectSSE();
+    this.emit('onAuthorize', {
+      loginid: this.loginid,
+      isVirtual: this.isDemo,
+      currency: this.currency,
+      balance: this.balance,
+      accountList: this.accountList
+    });
+
+    this.emit('onBalance', {
+      balance: this.balance,
+      currency: this.currency
+    });
+
     return data;
   }
 
@@ -358,8 +417,11 @@ export class DerivService {
 
   async subscribeTick(symbol) {
     try {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        await this.connectPublicWs();
+      }
       const res = await this.send({ ticks: symbol, subscribe: 1 });
-      if (res.subscription) {
+      if (res && res.subscription) {
         this.activeSubscriptions.set(res.subscription.id, { type: 'tick', symbol });
       }
       return res;

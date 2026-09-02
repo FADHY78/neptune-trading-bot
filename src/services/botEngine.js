@@ -203,8 +203,20 @@ export class NeptuneBotEngine {
 
       if (!this.running) break;
 
+      // If trade failed due to network/API error, pause and retry next cycle without taking false loss or applying Martingale
+      if (result.error) {
+        this.log(`Trade skipped: ${result.message}. Pausing for 5s...`, 'cooldown');
+        await this.sleep(5000);
+        continue;
+      }
+
       // Handle Result
       this.handleTradeResult(result, strat);
+
+      // Refresh live balance after trade completion
+      if (!this.config.simulationMode) {
+        derivApi.checkServerSession().catch(() => {});
+      }
 
       // Cooldown
       const cooldownSec = Number(this.config.postTradeCooldown) || 5;
@@ -236,20 +248,34 @@ export class NeptuneBotEngine {
     }
 
     if (this.config.tradingLogic === 'random') {
-      return Math.floor(Math.random() * 10);
+      return digits[Math.floor(Math.random() * digits.length)];
     }
 
-    // Analyze Mode: pick least frequent or strategic digit
+    // Analyze Mode: frequency-based selection tailored to strategy type
     if (this.digitCounts.some(c => c > 0)) {
-      let minCount = Infinity;
-      let candidate = digits[0];
-      digits.forEach(d => {
-        if (this.digitCounts[d] < minCount) {
-          minCount = this.digitCounts[d];
-          candidate = d;
-        }
-      });
-      return candidate;
+      if (strat.contractType === 'DIGITDIFF') {
+        // Differs: Target the least frequent digit (coldest)
+        let minCount = Infinity;
+        let candidate = digits[0];
+        digits.forEach(d => {
+          if (this.digitCounts[d] < minCount) {
+            minCount = this.digitCounts[d];
+            candidate = d;
+          }
+        });
+        return candidate;
+      } else if (strat.contractType === 'DIGITMATCH') {
+        // Matches: Target the most frequent digit (hottest)
+        let maxCount = -1;
+        let candidate = digits[0];
+        digits.forEach(d => {
+          if (this.digitCounts[d] > maxCount) {
+            maxCount = this.digitCounts[d];
+            candidate = d;
+          }
+        });
+        return candidate;
+      }
     }
 
     return digits[Math.floor(Math.random() * digits.length)];
@@ -292,15 +318,24 @@ export class NeptuneBotEngine {
 
   async executeLiveTrade(symbol, strat, targetDigit, stake) {
     try {
+      // Determine barrier based on strategy contract type
+      let barrier = targetDigit;
+      if (strat.contractType === 'DIGITOVER' || strat.contractType === 'DIGITUNDER') {
+        barrier = strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4);
+      }
+
       const buyRes = await derivApi.buyContract({
         symbol,
         contractType: strat.contractType,
         stake,
-        barrier: targetDigit
+        barrier: barrier
       });
 
       const contractId = buyRes.contract_id || buyRes.contractId;
       this.log(`Contract purchase confirmed! ID: ${contractId}`, 'info');
+
+      // Refresh live balance in background after contract purchase
+      derivApi.checkServerSession().catch(() => {});
 
       // If already resolved by the server proxy (Digit Atlas pattern)
       if (buyRes.won !== undefined && buyRes.profit !== undefined) {
@@ -331,7 +366,7 @@ export class NeptuneBotEngine {
       });
     } catch (e) {
       this.log(`Contract Execution Error: ${e.message}`, 'alert');
-      return { won: false, profit: -stake, exitDigit: 0, exitTick: '0.00', contractId: 'ERR' };
+      return { error: true, message: e.message };
     }
   }
 

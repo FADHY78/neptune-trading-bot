@@ -192,14 +192,22 @@ export function App() {
       }
     };
 
+    const onTick = (tickData) => {
+      if (tickData && tickData.lastDigit !== undefined) {
+        botEngine.recordTickDigit(tickData.lastDigit);
+      }
+    };
+
     derivApi.on('onAuthorize', onAuth);
     derivApi.on('onBalance', onBal);
     derivApi.on('onSymbols', onSyms);
+    derivApi.on('onTick', onTick);
 
     return () => {
       derivApi.off('onAuthorize', onAuth);
       derivApi.off('onBalance', onBal);
       derivApi.off('onSymbols', onSyms);
+      derivApi.off('onTick', onTick);
     };
   }, []);
 
@@ -213,15 +221,17 @@ export function App() {
     try {
       if (derivApi.isServerSession) {
         const res = await derivApi.switchServerAccount(targetAccount.loginid);
+        const newBalance = res.activeAccount.balance !== undefined ? res.activeAccount.balance : prev.balance;
         setWsState(prev => ({
           ...prev,
           isConnecting: false,
           isAuthorized: true,
           loginid: res.activeAccount.loginid,
           isDemo: Boolean(res.activeAccount.isVirtual),
-          currency: res.activeAccount.currency || prev.currency
+          currency: res.activeAccount.currency || prev.currency,
+          balance: newBalance
         }));
-        botEngine.log(`Switched successfully to ${res.activeAccount.isVirtual ? 'Demo' : 'Real'} Account: ${res.activeAccount.loginid}`, 'won');
+        botEngine.log(`Switched successfully to ${res.activeAccount.isVirtual ? 'Demo' : 'Real'} Account: ${res.activeAccount.loginid} (Balance: $${Number(newBalance || 0).toFixed(2)})`, 'won');
         return;
       }
 

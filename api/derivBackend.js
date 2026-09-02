@@ -286,6 +286,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
       activeLoginid: activeAcc.loginid,
       isVirtual: activeAcc.isVirtual,
       currency: activeAcc.currency,
+      balance: authInfo?.balance ?? 0,
       accounts: accounts,
       createdAt: Date.now(),
       expiresIn: tokenData.expires_in || 86400
@@ -330,13 +331,76 @@ export async function handleAuthStatus(req, res) {
   try {
     const session = JSON.parse(sessionRaw);
 
-    // Refresh balance and status via quick Deriv WS authorize
-    let liveBalance = 0;
+    // Refresh live balance, accounts list, and active details from Deriv WebSocket
+    let liveBalance = session.balance ?? 0;
     try {
-      const authRes = await sendDerivWsCommand({ authorize: session.accessToken }, 3500);
-      liveBalance = authRes.authorize?.balance ?? 0;
+      const authRes = await sendDerivWsCommand({ authorize: session.accessToken }, 5000);
+      if (authRes && authRes.authorize) {
+        liveBalance = authRes.authorize.balance ?? liveBalance;
+        session.balance = liveBalance;
+
+        // Populate and update all accounts from Deriv account_list
+        const rawList = authRes.authorize.account_list || [];
+        if (rawList.length > 0) {
+          session.accounts = rawList.map(a => ({
+            loginid: a.loginid,
+            currency: a.currency || 'USD',
+            isVirtual: Boolean(a.is_virtual),
+            disabled: Boolean(a.is_disabled),
+            landingCompany: a.landing_company_name,
+            token: a.token || (a.loginid === authRes.authorize.loginid ? session.accessToken : '')
+          }));
+
+          // Sort demo accounts first
+          session.accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
+        }
+
+        // If activeLoginid is placeholder or not in accounts, update to actual account
+        if (!session.activeLoginid || session.activeLoginid === 'VRTC_DEMO' || !session.accounts.find(a => a.loginid === session.activeLoginid)) {
+          const matched = session.accounts.find(a => a.loginid === authRes.authorize.loginid) || session.accounts[0];
+          if (matched) {
+            session.activeLoginid = matched.loginid;
+            session.isVirtual = matched.isVirtual;
+            session.currency = matched.currency;
+          } else {
+            session.activeLoginid = authRes.authorize.loginid;
+            session.isVirtual = Boolean(authRes.authorize.is_virtual);
+            session.currency = authRes.authorize.currency || 'USD';
+          }
+        }
+
+        // Persist updated session to signed cookie
+        const updatedCookie = signValue(JSON.stringify(session));
+        res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
+      }
     } catch (e) {
-      // If token expired or network hiccup, keep previous state
+      console.warn('Status refresh warning:', e.message);
+    }
+
+    // Fallback: if accounts still empty, fetch options REST API
+    if (!session.accounts || session.accounts.length === 0) {
+      try {
+        const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+          headers: {
+            'Deriv-App-ID': DERIV_WS_APP_ID,
+            'Authorization': `Bearer ${session.accessToken}`
+          }
+        });
+        if (restRes.ok) {
+          const restData = await restRes.json();
+          if (Array.isArray(restData) && restData.length > 0) {
+            session.accounts = restData.map(a => ({
+              loginid: a.id || a.loginid,
+              currency: a.currency || 'USD',
+              isVirtual: a.type === 'demo' || Boolean(a.is_virtual),
+              balance: a.balance || 0
+            }));
+            session.accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
+            const updatedCookie = signValue(JSON.stringify(session));
+            res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
+          }
+        }
+      } catch (e) {}
     }
 
     res.statusCode = 200;
@@ -344,15 +408,15 @@ export async function handleAuthStatus(req, res) {
       authenticated: true,
       activeAccount: {
         loginid: session.activeLoginid,
-        isVirtual: session.isVirtual,
-        currency: session.currency,
-        balance: liveBalance
+        isVirtual: Boolean(session.isVirtual),
+        currency: session.currency || 'USD',
+        balance: Number(liveBalance)
       },
-      accounts: session.accounts.map(a => ({
+      accounts: (session.accounts || []).map(a => ({
         loginid: a.loginid,
-        currency: a.currency,
-        isVirtual: a.isVirtual,
-        disabled: a.disabled
+        currency: a.currency || 'USD',
+        isVirtual: Boolean(a.isVirtual),
+        disabled: Boolean(a.disabled)
       }))
     }));
   } catch (e) {
