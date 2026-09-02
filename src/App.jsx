@@ -145,7 +145,8 @@ export function App() {
     setWsState(prev => ({ ...prev, isConnecting: true }));
 
     try {
-      await derivApi.connect(config.apiToken, config.appId || '34hP1yTdG6Hc7grRIWQWH');
+      const numericAppId = /^\d+$/.test(String(config.appId || '').trim()) ? String(config.appId).trim() : '1089';
+      await derivApi.connect(config.apiToken, numericAppId);
       setWsState({
         connected: true,
         isConnecting: false,
@@ -156,7 +157,7 @@ export function App() {
         loginid: derivApi.loginid,
         accountList: derivApi.accountList
       });
-      botEngine.log(`Connected to Deriv API (${derivApi.isDemo ? 'Demo Account' : 'Real Account'}) - Login ID: ${derivApi.loginid}`, 'info');
+      botEngine.log(`Connected to Deriv API (${derivApi.isDemo ? 'Demo Account' : 'Real Account'}) - Login ID: ${derivApi.loginid} (Balance: $${Number(derivApi.balance || 0).toFixed(2)})`, 'info');
     } catch (e) {
       setWsState(prev => ({ ...prev, isConnecting: false, isAuthorized: false }));
       botEngine.log(`Deriv Connection Failed: ${e.message}`, 'alert');

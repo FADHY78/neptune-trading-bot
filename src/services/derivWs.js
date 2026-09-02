@@ -431,7 +431,53 @@ export class DerivService {
   }
 
   async buyContract({ symbol, contractType, stake, barrier, duration = 1 }) {
-    // If authenticated via secure backend session (Digit Atlas architecture)
+    // 1. Prioritize direct WebSocket trade execution when token is authorized
+    if (this.authorized && this.token) {
+      const parameters = {
+        contract_type: contractType, // 'DIGITDIFF', 'DIGITMATCH', 'DIGITOVER', 'DIGITUNDER'
+        symbol: symbol,
+        duration: duration,
+        duration_unit: 't', // ticks
+        basis: 'stake',
+        amount: stake,
+        currency: this.currency || 'USD'
+      };
+
+      if (barrier !== undefined && barrier !== null) {
+        parameters.barrier = barrier.toString();
+      }
+
+      const res = await this.send({
+        buy: 1,
+        price: stake,
+        parameters
+      });
+
+      if (res.error) {
+        throw new Error(res.error.message || 'Contract purchase failed');
+      }
+
+      const buyInfo = res.buy;
+      this.activeContract = {
+        id: buyInfo.contract_id,
+        buyPrice: buyInfo.buy_price,
+        payout: buyInfo.payout,
+        symbol,
+        contractType,
+        startTime: Date.now()
+      };
+
+      // Subscribe to proposal open contract for this trade
+      this.send({
+        proposal_open_contract: 1,
+        contract_id: buyInfo.contract_id,
+        subscribe: 1
+      });
+
+      return buyInfo;
+    }
+
+    // 2. Otherwise if authenticated via secure backend session
     if (this.isServerSession) {
       const res = await fetch('/api/deriv/trade/buy', {
         method: 'POST',
