@@ -2,8 +2,11 @@ import crypto from 'crypto';
 
 // Secret key for signing HTTP-only cookies
 const SESSION_SECRET = process.env.DERIV_SESSION_SECRET || 'neptune_deriv_secret_key_digit_atlas_2026';
+// Deriv OAuth 2.0 Client ID (for auth.deriv.com)
 const DERIV_APP_ID = process.env.DERIV_APP_ID || '34hP1yTdG6Hc7grRIWQWH';
-const DERIV_WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`;
+// Deriv WebSocket API App ID (MUST be a numeric integer, e.g. 1089)
+const DERIV_WS_APP_ID = process.env.DERIV_WS_APP_ID || (/^\d+$/.test(String(DERIV_APP_ID).trim()) ? String(DERIV_APP_ID).trim() : '1089');
+const DERIV_WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_WS_APP_ID}`;
 
 /**
  * Cookie signing & verification helpers
@@ -569,7 +572,7 @@ export async function handleTradeBuy(req, res) {
               duration_unit: 't',
               basis: 'stake',
               amount: stake,
-              currency: session.currency || 'USD'
+              currency: data.authorize?.currency || session.currency || 'USD'
             };
 
             if (barrier !== undefined && barrier !== null) {
@@ -618,7 +621,7 @@ export async function handleTradeBuy(req, res) {
 
         ws.onerror = (err) => {
           clearTimeout(timer);
-          reject(new Error('Deriv WS connection failed during trade'));
+          reject(new Error(`Deriv WS connection failed during trade: ${err?.message || 'handshake error'}`));
         };
       });
 

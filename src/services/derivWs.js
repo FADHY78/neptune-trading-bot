@@ -6,7 +6,7 @@
 export class DerivService {
   constructor() {
     this.ws = null;
-    this.appId = '34hP1yTdG6Hc7grRIWQWH';
+    this.appId = '1089';
     this.token = '';
     this.connected = false;
     this.authorized = false;
@@ -181,9 +181,9 @@ export class DerivService {
     this.balance = 0;
   }
 
-  connect(token, appId = '34hP1yTdG6Hc7grRIWQWH') {
+  connect(token, appId = '1089') {
     return new Promise((resolve, reject) => {
-      this.appId = appId || '34hP1yTdG6Hc7grRIWQWH';
+      this.appId = appId || '1089';
       this.token = token;
 
       if (this.ws) {
@@ -191,7 +191,7 @@ export class DerivService {
       }
 
       const isNumeric = /^\d+$/.test(String(this.appId).trim());
-      const wsAppId = isNumeric ? String(this.appId).trim() : (this.appId || '34hP1yTdG6Hc7grRIWQWH');
+      const wsAppId = isNumeric ? String(this.appId).trim() : '1089';
 
       const url = `wss://ws.derivws.com/websockets/v3?app_id=${wsAppId}`;
       this.ws = new WebSocket(url);
