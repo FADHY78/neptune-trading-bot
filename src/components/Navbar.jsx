@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Activity, ShieldAlert, Volume2, VolumeX, Settings, Radio, LogIn, CheckCircle, ChevronDown, User, ShieldCheck } from 'lucide-react';
+import { Activity, ShieldAlert, Volume2, VolumeX, Settings, Radio, LogIn, LogOut, CheckCircle, ChevronDown, User, ShieldCheck } from 'lucide-react';
 
 export const Navbar = ({ 
   connected, 
@@ -15,7 +15,8 @@ export const Navbar = ({
   onToggleSound,
   onOpenRiskModal,
   onOpenSettings,
-  onDerivLogin
+  onDerivLogin,
+  onLogout
 }) => {
   const [showAccountMenu, setShowAccountMenu] = useState(false);
 
@@ -187,19 +188,31 @@ export const Navbar = ({
             <span>Log in with Deriv</span>
           </button>
         ) : (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            fontSize: '12px',
-            color: isDemo ? 'var(--accent-cyan)' : 'var(--color-success)',
-            backgroundColor: isDemo ? 'rgba(0, 212, 255, 0.08)' : 'rgba(0, 230, 118, 0.1)',
-            padding: '6px 12px',
-            borderRadius: '6px',
-            border: `1px solid ${isDemo ? 'rgba(0, 212, 255, 0.3)' : 'rgba(0, 230, 118, 0.3)'}`
-          }}>
-            <ShieldCheck size={14} />
-            <span>{isDemo ? 'Demo Live' : 'Real Money Active'}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '12px',
+              color: isDemo ? 'var(--accent-cyan)' : 'var(--color-success)',
+              backgroundColor: isDemo ? 'rgba(0, 212, 255, 0.08)' : 'rgba(0, 230, 118, 0.1)',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              border: `1px solid ${isDemo ? 'rgba(0, 212, 255, 0.3)' : 'rgba(0, 230, 118, 0.3)'}`
+            }}>
+              <ShieldCheck size={14} />
+              <span>{isDemo ? 'Demo Live' : 'Real Money Active'}</span>
+            </div>
+            {onLogout && (
+              <button
+                className="btn btn-secondary"
+                onClick={onLogout}
+                title="Log out of Deriv Session"
+                style={{ padding: '6px 10px', fontSize: '12px', color: 'var(--text-muted)' }}
+              >
+                <LogOut size={14} />
+              </button>
+            )}
           </div>
         )}
 

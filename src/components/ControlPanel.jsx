@@ -19,7 +19,8 @@ export const ControlPanel = ({
   isRunning,
   onStartBot,
   onStopBot,
-  onClearData
+  onClearData,
+  onLogout
 }) => {
   const [showToken, setShowToken] = useState(false);
   const [symbolFilter, setSymbolFilter] = useState('all'); // 'all', '1s', 'continuous', 'other'
@@ -101,26 +102,55 @@ export const ControlPanel = ({
 
         {!config.simulationMode && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-              <button
-                className="btn btn-primary"
-                style={{ gap: '6px', fontSize: '11px', padding: '8px 10px', justifyContent: 'center' }}
-                onClick={onOAuthLogin}
-                disabled={isConnecting}
-                title="Log in using Deriv OAuth 2.0 PKCE flow"
-              >
-                <span>🔑 Log in (PKCE)</span>
-              </button>
-              <button
-                className="btn btn-secondary"
-                style={{ gap: '6px', fontSize: '11px', padding: '8px 10px', justifyContent: 'center' }}
-                onClick={onOAuthSignUp}
-                disabled={isConnecting}
-                title="Create a new Deriv account with PKCE registration flow"
-              >
-                <span>✨ Sign Up</span>
-              </button>
-            </div>
+            {isAuthorized ? (
+              <div style={{
+                backgroundColor: 'rgba(0, 230, 118, 0.08)',
+                border: '1px solid rgba(0, 230, 118, 0.3)',
+                borderRadius: '6px',
+                padding: '10px 12px',
+                marginBottom: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: 'var(--color-success)', fontSize: '12px', fontWeight: '600' }}>
+                    🔒 Deriv Secure Session Active
+                  </span>
+                </div>
+                {onLogout && (
+                  <button
+                    className="btn btn-secondary"
+                    onClick={onLogout}
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                    title="Disconnect Deriv Session"
+                  >
+                    Log Out
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ gap: '6px', fontSize: '11px', padding: '8px 10px', justifyContent: 'center' }}
+                  onClick={onOAuthLogin}
+                  disabled={isConnecting}
+                  title="Log in using Deriv OAuth 2.0 PKCE flow"
+                >
+                  <span>🔑 Log in (Deriv)</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ gap: '6px', fontSize: '11px', padding: '8px 10px', justifyContent: 'center' }}
+                  onClick={onOAuthSignUp}
+                  disabled={isConnecting}
+                  title="Create a new Deriv account with PKCE registration flow"
+                >
+                  <span>✨ Sign Up</span>
+                </button>
+              </div>
+            )}
 
             <div style={{ textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
               — OR CONNECT WITH API TOKEN —

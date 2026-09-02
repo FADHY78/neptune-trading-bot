@@ -299,12 +299,24 @@ export class NeptuneBotEngine {
         barrier: targetDigit
       });
 
-      this.log(`Contract purchase confirmed! ID: ${buyRes.contract_id}`, 'info');
+      const contractId = buyRes.contract_id || buyRes.contractId;
+      this.log(`Contract purchase confirmed! ID: ${contractId}`, 'info');
 
-      // Wait for proposal open contract result
+      // If already resolved by the server proxy (Digit Atlas pattern)
+      if (buyRes.won !== undefined && buyRes.profit !== undefined) {
+        return {
+          won: buyRes.won,
+          profit: buyRes.profit,
+          exitDigit: buyRes.exitDigit,
+          exitTick: buyRes.exitTick,
+          contractId: contractId
+        };
+      }
+
+      // Wait for proposal open contract result (in direct WS mode)
       return new Promise((resolve) => {
         const handler = (res) => {
-          if (res.contractId === buyRes.contract_id) {
+          if (res.contractId === contractId) {
             derivApi.off('onContractResult', handler);
             resolve({
               won: res.won,

@@ -40,112 +40,53 @@ export function App() {
     saveStoredConfig(newConfig);
   };
 
-  // Deriv OAuth 2.0 Redirect & PKCE Token Handler
+  // Deriv OAuth 2.0 & Backend Session Check (Digit Atlas Architecture)
   useEffect(() => {
-    const oauthParams = parseDerivOAuthParams();
+    const urlParams = new URLSearchParams(window.location.search);
+    const loginStatus = urlParams.get('login');
+    const errorParam = urlParams.get('error');
 
-    // Check for callback error
-    if (oauthParams.error) {
-      botEngine.log(`OAuth Error: ${oauthParams.errorDescription || oauthParams.error}`, 'alert');
+    if (loginStatus === 'success') {
+      botEngine.log('Deriv OAuth 2.0 login successful! Secure HTTP-only session active.', 'won');
       window.history.replaceState({}, document.title, window.location.pathname);
-      return;
-    }
-
-    // Modern Deriv OAuth 2.0 PKCE Code Exchange
-    if (oauthParams.isCodeFlow && oauthParams.code) {
-      if (!oauthParams.validState) {
-        botEngine.log('OAuth Security Warning: State mismatch (potential CSRF). Exchange aborted.', 'alert');
-        window.history.replaceState({}, document.title, window.location.pathname);
-        return;
-      }
-
-      const activeClientId = config.appId || '34hP1yTdG6Hc7grRIWQWH';
-      const redirectUri = `${window.location.origin}${window.location.pathname}`;
-
-      // Clean up URL immediately
+    } else if (errorParam) {
+      botEngine.log(`Deriv OAuth Error: ${errorParam}`, 'alert');
       window.history.replaceState({}, document.title, window.location.pathname);
-      setWsState(prev => ({ ...prev, isConnecting: true }));
-      botEngine.log('Exchanging authorization code for Deriv access token (PKCE)...', 'info');
-
-      exchangeCodeForToken({
-        code: oauthParams.code,
-        clientId: activeClientId,
-        redirectUri
-      })
-        .then(async (tokenData) => {
-          const accessToken = tokenData.access_token;
-          if (!accessToken) {
-            throw new Error('No access_token returned by Deriv token endpoint');
-          }
-
-          const updatedConfig = {
-            ...config,
-            apiToken: accessToken,
-            simulationMode: false
-          };
-          setConfig(updatedConfig);
-          saveStoredConfig(updatedConfig);
-
-          botEngine.log('Deriv OAuth 2.0 PKCE login successful!', 'won');
-
-          // Connect to Deriv WebSocket with access token
-          await derivApi.connect(accessToken, activeClientId);
-          setWsState({
-            connected: true,
-            isConnecting: false,
-            isAuthorized: derivApi.authorized,
-            balance: derivApi.balance,
-            currency: derivApi.currency,
-            isDemo: derivApi.isDemo,
-            loginid: derivApi.loginid,
-            accountList: derivApi.accountList
-          });
-          botEngine.log(`Connected & Authorized (${derivApi.isDemo ? 'Demo Account' : 'Real Account'}) - Login ID: ${derivApi.loginid}`, 'won');
-        })
-        .catch((err) => {
-          console.error('PKCE exchange error:', err);
-          botEngine.log(`Deriv OAuth PKCE failed: ${err.message}`, 'alert');
-          setWsState(prev => ({ ...prev, isConnecting: false }));
-        });
-      return;
     }
 
-    // Direct token callback fallback (?acct1=...&token1=...)
-    if (oauthParams.accounts && oauthParams.accounts.length > 0) {
-      const primary = oauthParams.accounts[0];
-      if (primary.token) {
-        const token = primary.token;
-        const currency = primary.currency || 'USD';
-
-        window.history.replaceState({}, document.title, window.location.pathname);
-
-        const updatedConfig = {
-          ...config,
-          apiToken: token,
-          currency: currency,
-          simulationMode: false
-        };
-        setConfig(updatedConfig);
-        saveStoredConfig(updatedConfig);
-
-        setWsState(prev => ({ ...prev, isConnecting: true }));
-        derivApi.connect(token, config.appId || '34hP1yTdG6Hc7grRIWQWH').then(() => {
-          botEngine.log(`Deriv Login successful! Account: ${primary.account}`, 'won');
-        }).catch((e) => {
-          botEngine.log(`Deriv Authorization Error: ${e.message}`, 'alert');
-          setWsState(prev => ({ ...prev, isConnecting: false }));
+    // Check for active server session (Digit Atlas secure HTTP-only cookie)
+    setWsState(prev => ({ ...prev, isConnecting: true }));
+    derivApi.checkServerSession().then((sessionRes) => {
+      if (sessionRes && sessionRes.authenticated) {
+        setWsState({
+          connected: true,
+          isConnecting: false,
+          isAuthorized: true,
+          balance: sessionRes.activeAccount.balance || 0,
+          currency: sessionRes.activeAccount.currency || 'USD',
+          isDemo: Boolean(sessionRes.activeAccount.isVirtual),
+          loginid: sessionRes.activeAccount.loginid,
+          accountList: sessionRes.accounts || []
         });
+        botEngine.log(`Deriv Secure Session active (${sessionRes.activeAccount.isVirtual ? 'Demo Account' : 'Real Account'}) - Login ID: ${sessionRes.activeAccount.loginid}`, 'won');
+      } else {
+        // Fallback: check manual API token in local config
+        if (config.apiToken && !config.simulationMode) {
+          handleConnectDeriv();
+        } else {
+          setWsState(prev => ({ ...prev, isConnecting: false }));
+        }
       }
-    }
+    }).catch((err) => {
+      console.warn('Session check warning:', err);
+      setWsState(prev => ({ ...prev, isConnecting: false }));
+    });
   }, []);
 
   const handleDerivOAuthLogin = async () => {
     try {
-      const redirectUri = `${window.location.origin}${window.location.pathname}`;
       const url = await getDerivOAuth2Url({
-        clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH',
-        redirectUri,
-        scope: 'trade account_manage'
+        clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH'
       });
       window.location.href = url;
     } catch (e) {
@@ -155,11 +96,8 @@ export function App() {
 
   const handleDerivOAuthSignUp = async () => {
     try {
-      const redirectUri = `${window.location.origin}${window.location.pathname}`;
       const url = await getDerivOAuth2Url({
         clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH',
-        redirectUri,
-        scope: 'trade account_manage',
         isSignUp: true
       });
       window.location.href = url;
@@ -168,14 +106,21 @@ export function App() {
     }
   };
 
-  // Auto-connect on startup if token is present
-  useEffect(() => {
-    const oauthParams = parseDerivOAuthParams();
-    const hasOAuthParams = oauthParams.isCodeFlow || (oauthParams.accounts && oauthParams.accounts.length > 0);
-    if (!hasOAuthParams && config.apiToken && !config.simulationMode) {
-      handleConnectDeriv();
-    }
-  }, []);
+  const handleLogout = async () => {
+    botEngine.log('Logging out from Deriv session...', 'info');
+    await derivApi.logoutServer();
+    setWsState({
+      connected: false,
+      isConnecting: false,
+      isAuthorized: false,
+      balance: 0,
+      currency: 'USD',
+      isDemo: true,
+      loginid: '',
+      accountList: []
+    });
+    botEngine.log('Deriv session closed.', 'info');
+  };
 
   // Subscribe to Bot Engine Updates
   useEffect(() => {
@@ -257,6 +202,20 @@ export function App() {
     setWsState(prev => ({ ...prev, isConnecting: true }));
 
     try {
+      if (derivApi.isServerSession) {
+        const res = await derivApi.switchServerAccount(targetAccount.loginid);
+        setWsState(prev => ({
+          ...prev,
+          isConnecting: false,
+          isAuthorized: true,
+          loginid: res.activeAccount.loginid,
+          isDemo: Boolean(res.activeAccount.isVirtual),
+          currency: res.activeAccount.currency || prev.currency
+        }));
+        botEngine.log(`Switched successfully to ${res.activeAccount.isVirtual ? 'Demo' : 'Real'} Account: ${res.activeAccount.loginid}`, 'won');
+        return;
+      }
+
       if (targetAccount.token) {
         // If account has dedicated token, authorize directly
         await derivApi.authorize(targetAccount.token);
@@ -332,6 +291,7 @@ export function App() {
         onToggleSound={() => handleConfigChange({ ...config, soundEffects: !config.soundEffects })}
         onOpenRiskModal={() => setShowRiskModal(true)}
         onDerivLogin={handleDerivOAuthLogin}
+        onLogout={handleLogout}
       />
 
       {/* Main Dashboard Workspace */}
@@ -351,6 +311,7 @@ export function App() {
           onStartBot={handleStartBot}
           onStopBot={handleStopBot}
           onClearData={handleClearData}
+          onLogout={handleLogout}
         />
 
         {/* RIGHT PANEL — LIVE TRADING VIEW */}

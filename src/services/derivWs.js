@@ -29,6 +29,9 @@ export class DerivService {
       onError: []
     };
 
+    this.isServerSession = false;
+    this.eventSource = null;
+
     this.activeSubscriptions = new Map();
     this.reqIdCounter = 1;
     this.pendingRequests = new Map();
@@ -52,6 +55,130 @@ export class DerivService {
         try { cb(data); } catch(e) { console.error(`Error in callback [${event}]:`, e); }
       });
     }
+  }
+
+  /**
+   * Connect to Server-Sent Events (SSE) market stream
+   */
+  connectSSE(symbol = '1HZ100V') {
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+
+    const sseUrl = `/api/deriv/market/ticks?symbol=${encodeURIComponent(symbol)}`;
+    this.eventSource = new EventSource(sseUrl);
+
+    this.eventSource.addEventListener('authorized', (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        this.authorized = true;
+        this.connected = true;
+        this.loginid = data.loginid;
+        this.balance = data.balance;
+        this.currency = data.currency;
+        this.isDemo = Boolean(data.isVirtual);
+        this.emit('onAuthorize', data);
+      } catch (e) {}
+    });
+
+    this.eventSource.addEventListener('balance', (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        this.balance = data.balance;
+        this.currency = data.currency;
+        this.emit('onBalance', data);
+      } catch (e) {}
+    });
+
+    this.eventSource.addEventListener('tick', (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        this.emit('onTick', data);
+      } catch (e) {}
+    });
+
+    this.eventSource.onerror = (err) => {
+      console.warn('SSE Market connection warning, retrying...');
+    };
+
+    this.connected = true;
+    this.emit('onConnect', { sse: true });
+    return this.eventSource;
+  }
+
+  /**
+   * Check if user is authenticated via server HTTP-only session cookie
+   */
+  async checkServerSession() {
+    try {
+      const res = await fetch('/api/deriv/auth/status', { credentials: 'same-origin' });
+      const data = await res.json();
+      if (data.authenticated && data.activeAccount) {
+        this.isServerSession = true;
+        this.authorized = true;
+        this.connected = true;
+        this.loginid = data.activeAccount.loginid;
+        this.isDemo = Boolean(data.activeAccount.isVirtual);
+        this.currency = data.activeAccount.currency || 'USD';
+        this.balance = data.activeAccount.balance || 0;
+        this.accountList = data.accounts || [];
+
+        this.emit('onAuthorize', {
+          loginid: this.loginid,
+          isVirtual: this.isDemo,
+          currency: this.currency,
+          balance: this.balance,
+          accountList: this.accountList
+        });
+
+        // Connect market tick stream via SSE proxy
+        this.connectSSE();
+        this.fetchActiveSymbols();
+
+        return { authenticated: true, activeAccount: data.activeAccount, accounts: data.accounts };
+      }
+    } catch (e) {
+      console.warn('Could not check server session:', e);
+    }
+    return { authenticated: false };
+  }
+
+  /**
+   * Switch account on backend session
+   */
+  async switchServerAccount(loginid) {
+    const res = await fetch('/api/deriv/account/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ loginid })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to switch account');
+
+    this.loginid = data.activeAccount.loginid;
+    this.isDemo = data.activeAccount.isVirtual;
+    this.currency = data.activeAccount.currency;
+
+    // Refresh SSE connection
+    this.connectSSE();
+    return data;
+  }
+
+  /**
+   * Log out and clear server HTTP-only cookies
+   */
+  async logoutServer() {
+    try {
+      await fetch('/api/deriv/auth/logout', { method: 'POST' });
+    } catch (e) {}
+    this.disconnect();
+    this.isServerSession = false;
+    this.authorized = false;
+    this.connected = false;
+    this.loginid = '';
+    this.accountList = [];
+    this.balance = 0;
   }
 
   connect(token, appId = '34hP1yTdG6Hc7grRIWQWH') {
@@ -98,6 +225,10 @@ export class DerivService {
   }
 
   disconnect() {
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -238,8 +369,26 @@ export class DerivService {
   }
 
   async buyContract({ symbol, contractType, stake, barrier, duration = 1 }) {
+    // If authenticated via secure backend session (Digit Atlas architecture)
+    if (this.isServerSession) {
+      const res = await fetch('/api/deriv/trade/buy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, contractType, stake, barrier, duration })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Server trade execution failed');
+      }
+      this.emit('onContractResult', data);
+      return {
+        contract_id: data.contractId,
+        ...data
+      };
+    }
+
     if (!this.authorized) {
-      throw new Error('Deriv API is not authorized. Enter API Token.');
+      throw new Error('Deriv API is not authorized. Enter API Token or Log in with Deriv.');
     }
 
     const parameters = {
@@ -387,36 +536,12 @@ export const generatePKCE = async () => {
  */
 export const getDerivOAuth2Url = async ({
   clientId = '34hP1yTdG6Hc7grRIWQWH',
-  redirectUri = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '',
-  scope = 'trade account_manage',
-  isSignUp = false,
-  tracking = {}
+  isSignUp = false
 } = {}) => {
-  const { codeChallenge, state } = await generatePKCE();
-
-  const cleanClientId = String(clientId || '34hP1yTdG6Hc7grRIWQWH').trim();
-  const cleanRedirectUri = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '');
-
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: cleanClientId,
-    redirect_uri: cleanRedirectUri,
-    scope: scope,
-    state: state,
-    code_challenge: codeChallenge,
-    code_challenge_method: 'S256'
-  });
-
-  if (isSignUp) {
-    params.set('prompt', 'registration');
-    const trackToken = tracking.t || tracking.affiliate_token || tracking.sidi || tracking.ca;
-    if (trackToken) params.set('t', trackToken);
-    if (tracking.utm_campaign) params.set('utm_campaign', tracking.utm_campaign);
-    if (tracking.utm_medium) params.set('utm_medium', tracking.utm_medium);
-    if (tracking.utm_source) params.set('utm_source', tracking.utm_source);
-  }
-
-  return `https://auth.deriv.com/oauth2/auth?${params.toString()}`;
+  const params = new URLSearchParams();
+  if (isSignUp) params.set('signup', 'true');
+  if (clientId && clientId !== '34hP1yTdG6Hc7grRIWQWH') params.set('client_id', clientId);
+  return `/api/deriv/oauth/start${params.toString() ? `?${params.toString()}` : ''}`;
 };
 
 // Backwards compatibility alias
