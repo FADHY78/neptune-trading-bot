@@ -65,8 +65,8 @@ export function App() {
     }
   }, []);
 
-  const handleDerivOAuthLogin = () => {
-    const url = getDerivOAuthUrl(config.appId || '34hP1yTdG6Hc7grRIWQWH');
+  const handleDerivOAuthLogin = async () => {
+    const url = await getDerivOAuthUrl(config.appId || '34hP1yTdG6Hc7grRIWQWH');
     window.location.href = url;
   };
 

@@ -280,51 +280,75 @@ export class DerivService {
 export const derivApi = new DerivService();
 
 /**
- * Generate Deriv OAuth 2.0 Login URL (Supports both Direct App ID and PKCE)
+ * Generate Deriv OAuth 2.0 Authorization URL
+ * Official Spec: https://developers.deriv.com/docs/intro/oauth/
  */
-export const getDerivOAuthUrl = (appId = '1089') => {
-  const isNumeric = /^\d+$/.test(String(appId).trim());
-  const validAppId = isNumeric ? String(appId).trim() : '1089';
-  return `https://oauth.deriv.com/oauth2/authorize?app_id=${validAppId}&l=en`;
-};
-
-/**
- * Generate Deriv OAuth 2.0 PKCE Code Challenge URL (As documented in Deriv API OAuth 2.0 docs)
- */
-export const generatePKCEOAuthUrl = async (appId = '34hP1yTdG6Hc7grRIWQWH', redirectUri = window.location.origin) => {
+export const getDerivOAuthUrl = async (appId = '34hP1yTdG6Hc7grRIWQWH', redirectUri = typeof window !== 'undefined' ? window.location.origin + '/' : 'https://neptune-trading-bot.vercel.app/') => {
+  const clientId = appId || '34hP1yTdG6Hc7grRIWQWH';
+  
   try {
+    // 1. Generate random PKCE code_verifier
     const array = crypto.getRandomValues(new Uint8Array(64));
     const codeVerifier = Array.from(array)
       .map(v => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'[v % 66])
       .join('');
 
+    // 2. Derive code_challenge = BASE64URL(SHA256(verifier))
     const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
     const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(hash)))
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=+$/, '');
 
+    // 3. Generate CSRF state
     const state = Array.from(crypto.getRandomValues(new Uint8Array(16)))
       .map(b => b.toString(16).padStart(2, '0'))
       .join('');
 
+    // 4. Store in sessionStorage
     sessionStorage.setItem('pkce_code_verifier', codeVerifier);
     sessionStorage.setItem('oauth_state', state);
 
-    return `https://oauth.deriv.com/oauth2/authorize?app_id=${appId}&l=en`;
+    // 5. Build official auth.deriv.com URL
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: 'trade account_manage',
+      state: state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256'
+    });
+
+    return `https://auth.deriv.com/oauth2/auth?${params.toString()}`;
   } catch (e) {
-    return getDerivOAuthUrl(appId);
+    return `https://auth.deriv.com/oauth2/auth?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=trade+account_manage`;
   }
 };
 
 /**
- * Parse OAuth redirect tokens from URL search query (e.g. ?acct1=VRTC123456&token1=a1-xxx)
+ * Parse OAuth redirect tokens or code from URL query string
  */
-export const parseDerivOAuthParams = (queryString = window.location.search) => {
+export const parseDerivOAuthParams = (queryString = typeof window !== 'undefined' ? window.location.search : '') => {
   const searchParams = new URLSearchParams(queryString);
+
+  // PKCE Code Flow Response
+  if (searchParams.has('code')) {
+    const code = searchParams.get('code');
+    const state = searchParams.get('state');
+    const storedState = sessionStorage.getItem('oauth_state');
+
+    return [{
+      code,
+      state,
+      isCodeFlow: true,
+      validState: !storedState || state === storedState
+    }];
+  }
+
+  // Direct Token Query Params (?acct1=...&token1=...)
   const accounts = [];
   let index = 1;
-
   while (searchParams.has(`acct${index}`)) {
     accounts.push({
       account: searchParams.get(`acct${index}`),
