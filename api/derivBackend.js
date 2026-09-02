@@ -253,32 +253,62 @@ export async function handleOAuthCallback(req, res, urlObj) {
 
     const accessToken = tokenData.access_token;
 
-    // Account Discovery via Deriv WebSocket authorize
-    let authInfo = null;
+    // Account Discovery via Deriv Options REST API (official for OAuth 2.0 PKCE Bearer JWT)
+    let accounts = [];
+    let initialBalance = 0;
+
     try {
-      const authRes = await sendDerivWsCommand({ authorize: accessToken });
-      authInfo = authRes.authorize;
-    } catch (authErr) {
-      console.warn('Deriv WS authorize discovery note:', authErr.message);
+      const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+        headers: {
+          'Deriv-App-ID': DERIV_WS_APP_ID,
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      if (restRes.ok) {
+        const restList = await restRes.json();
+        if (Array.isArray(restList) && restList.length > 0) {
+          accounts = restList.map(a => ({
+            loginid: a.id || a.loginid,
+            currency: a.currency || 'USD',
+            isVirtual: a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'),
+            balance: Number(a.balance || 0),
+            disabled: false
+          }));
+        }
+      }
+    } catch (restErr) {
+      console.warn('Options REST accounts discovery note:', restErr.message);
     }
 
-    // Process accounts (prioritize Demo accounts over Real as per Digit Atlas logic)
-    const rawAccountList = authInfo?.account_list || [];
-    const accounts = rawAccountList.map(a => ({
-      loginid: a.loginid,
-      currency: a.currency,
-      isVirtual: Boolean(a.is_virtual),
-      disabled: Boolean(a.is_disabled),
-      token: a.token || (a.loginid === authInfo?.loginid ? accessToken : '')
-    }));
+    // Fallback: if token is <= 128 chars, try WS authorize
+    if (accounts.length === 0 && accessToken.length <= 128) {
+      try {
+        const authRes = await sendDerivWsCommand({ authorize: accessToken }, 4000);
+        if (authRes?.authorize) {
+          const rawAccountList = authRes.authorize.account_list || [];
+          accounts = rawAccountList.map(a => ({
+            loginid: a.loginid,
+            currency: a.currency || 'USD',
+            isVirtual: Boolean(a.is_virtual),
+            balance: a.loginid === authRes.authorize.loginid ? authRes.authorize.balance : 0,
+            disabled: Boolean(a.is_disabled)
+          }));
+          initialBalance = authRes.authorize.balance || 0;
+        }
+      } catch (wsErr) {
+        console.warn('WS accounts discovery note:', wsErr.message);
+      }
+    }
 
     // Prioritize Virtual/Demo account
     accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
     const activeAcc = accounts[0] || {
-      loginid: authInfo?.loginid || 'VRTC_DEMO',
-      currency: authInfo?.currency || 'USD',
-      isVirtual: Boolean(authInfo?.is_virtual ?? true)
+      loginid: 'VRTC_DEMO',
+      currency: 'USD',
+      isVirtual: true,
+      balance: 0
     };
+    initialBalance = activeAcc.balance || initialBalance;
 
     // Store Session in signed HTTP-only cookie
     const sessionPayload = JSON.stringify({
@@ -286,7 +316,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
       activeLoginid: activeAcc.loginid,
       isVirtual: activeAcc.isVirtual,
       currency: activeAcc.currency,
-      balance: authInfo?.balance ?? 0,
+      balance: initialBalance,
       accounts: accounts,
       createdAt: Date.now(),
       expiresIn: tokenData.expires_in || 86400
@@ -331,76 +361,82 @@ export async function handleAuthStatus(req, res) {
   try {
     const session = JSON.parse(sessionRaw);
 
-    // Refresh live balance, accounts list, and active details from Deriv WebSocket
+    // Refresh live balance and accounts list
     let liveBalance = session.balance ?? 0;
-    try {
-      const authRes = await sendDerivWsCommand({ authorize: session.accessToken }, 5000);
-      if (authRes && authRes.authorize) {
-        liveBalance = authRes.authorize.balance ?? liveBalance;
-        session.balance = liveBalance;
 
-        // Populate and update all accounts from Deriv account_list
-        const rawList = authRes.authorize.account_list || [];
-        if (rawList.length > 0) {
-          session.accounts = rawList.map(a => ({
-            loginid: a.loginid,
+    // 1. Deriv Options REST API (supports Bearer JWT tokens from OAuth 2.0 PKCE)
+    try {
+      const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+        headers: {
+          'Deriv-App-ID': DERIV_WS_APP_ID,
+          'Authorization': `Bearer ${session.accessToken}`
+        }
+      });
+      if (restRes.ok) {
+        const restList = await restRes.json();
+        if (Array.isArray(restList) && restList.length > 0) {
+          session.accounts = restList.map(a => ({
+            loginid: a.id || a.loginid,
             currency: a.currency || 'USD',
-            isVirtual: Boolean(a.is_virtual),
-            disabled: Boolean(a.is_disabled),
-            landingCompany: a.landing_company_name,
-            token: a.token || (a.loginid === authRes.authorize.loginid ? session.accessToken : '')
+            isVirtual: a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'),
+            balance: Number(a.balance || 0),
+            disabled: false
           }));
 
-          // Sort demo accounts first
           session.accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
-        }
 
-        // If activeLoginid is placeholder or not in accounts, update to actual account
-        if (!session.activeLoginid || session.activeLoginid === 'VRTC_DEMO' || !session.accounts.find(a => a.loginid === session.activeLoginid)) {
-          const matched = session.accounts.find(a => a.loginid === authRes.authorize.loginid) || session.accounts[0];
-          if (matched) {
-            session.activeLoginid = matched.loginid;
-            session.isVirtual = matched.isVirtual;
-            session.currency = matched.currency;
-          } else {
-            session.activeLoginid = authRes.authorize.loginid;
-            session.isVirtual = Boolean(authRes.authorize.is_virtual);
-            session.currency = authRes.authorize.currency || 'USD';
-          }
-        }
+          // Set active account
+          const active = session.accounts.find(a => a.loginid === session.activeLoginid) || session.accounts[0];
+          session.activeLoginid = active.loginid;
+          session.isVirtual = active.isVirtual;
+          session.currency = active.currency;
+          liveBalance = active.balance;
+          session.balance = liveBalance;
 
-        // Persist updated session to signed cookie
-        const updatedCookie = signValue(JSON.stringify(session));
-        res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
+          const updatedCookie = signValue(JSON.stringify(session));
+          res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
+        }
       }
-    } catch (e) {
-      console.warn('Status refresh warning:', e.message);
+    } catch (restErr) {
+      console.warn('REST status refresh note:', restErr.message);
     }
 
-    // Fallback: if accounts still empty, fetch options REST API
-    if (!session.accounts || session.accounts.length === 0) {
+    // 2. If token is standard API token (<= 128 chars), refresh via Deriv WebSocket
+    if (session.accessToken && session.accessToken.length <= 128) {
       try {
-        const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
-          headers: {
-            'Deriv-App-ID': DERIV_WS_APP_ID,
-            'Authorization': `Bearer ${session.accessToken}`
-          }
-        });
-        if (restRes.ok) {
-          const restData = await restRes.json();
-          if (Array.isArray(restData) && restData.length > 0) {
-            session.accounts = restData.map(a => ({
-              loginid: a.id || a.loginid,
+        const authRes = await sendDerivWsCommand({ authorize: session.accessToken }, 4000);
+        if (authRes && authRes.authorize) {
+          liveBalance = authRes.authorize.balance ?? liveBalance;
+          session.balance = liveBalance;
+
+          const rawList = authRes.authorize.account_list || [];
+          if (rawList.length > 0) {
+            session.accounts = rawList.map(a => ({
+              loginid: a.loginid,
               currency: a.currency || 'USD',
-              isVirtual: a.type === 'demo' || Boolean(a.is_virtual),
-              balance: a.balance || 0
+              isVirtual: Boolean(a.is_virtual),
+              disabled: Boolean(a.is_disabled),
+              landingCompany: a.landing_company_name,
+              token: a.token || (a.loginid === authRes.authorize.loginid ? session.accessToken : '')
             }));
             session.accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
-            const updatedCookie = signValue(JSON.stringify(session));
-            res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
           }
+
+          if (!session.activeLoginid || session.activeLoginid === 'VRTC_DEMO' || !session.accounts.find(a => a.loginid === session.activeLoginid)) {
+            const matched = session.accounts.find(a => a.loginid === authRes.authorize.loginid) || session.accounts[0];
+            if (matched) {
+              session.activeLoginid = matched.loginid;
+              session.isVirtual = matched.isVirtual;
+              session.currency = matched.currency;
+            }
+          }
+
+          const updatedCookie = signValue(JSON.stringify(session));
+          res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
         }
-      } catch (e) {}
+      } catch (wsErr) {
+        console.warn('WS status refresh note:', wsErr.message);
+      }
     }
 
     res.statusCode = 200;
@@ -524,11 +560,11 @@ export function handleMarketTicksSSE(req, res, urlObj) {
   }, 15000);
 
   ws.onopen = () => {
-    // If user has session, authorize the connection
-    if (session?.accessToken) {
+    // If user has API token (<= 128 chars), authorize the connection
+    if (session?.accessToken && session.accessToken.length <= 128) {
       ws.send(JSON.stringify({ authorize: session.accessToken, req_id: 1 }));
     } else {
-      // Fallback: public market feed
+      // Stream public market feed directly (zero latency)
       ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: 2 }));
     }
   };
@@ -604,97 +640,176 @@ export async function handleTradeBuy(req, res) {
       return;
     }
 
-      // Open authenticated WS to Deriv to buy contract and await outcome
-      const ws = new WebSocket(DERIV_WS_URL);
-      let contractBuyId = null;
+    let targetWsUrl = DERIV_WS_URL;
+    let authReqPayload = null;
 
-      const tradePromise = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          try { ws.close(); } catch(e) {}
-          reject(new Error('Trade execution timeout waiting for contract result'));
-        }, 15000);
+    if (session.accessToken && session.accessToken.length > 128) {
+      // OAuth 2.0 PKCE flow: Acquire short-lived OTP for the selected account
+      try {
+        const otpData = await getDerivAccountOtp(session.activeLoginid, session.accessToken);
+        if (otpData.url) {
+          targetWsUrl = otpData.url;
+        }
+        if (otpData.otp) {
+          authReqPayload = { authorize: otpData.otp, req_id: 1 };
+        }
+      } catch (otpErr) {
+        console.warn('OTP acquisition note:', otpErr.message);
+      }
+    } else {
+      // Direct API Token flow
+      authReqPayload = { authorize: session.accessToken, req_id: 1 };
+    }
 
-        ws.onopen = () => {
-          ws.send(JSON.stringify({ authorize: session.accessToken, req_id: 1 }));
+    const ws = new WebSocket(targetWsUrl);
+    let contractBuyId = null;
+
+    const tradePromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch(e) {}
+        reject(new Error('Trade execution timeout waiting for contract result'));
+      }, 15000);
+
+      const sendBuyOrder = (currency = 'USD') => {
+        const parameters = {
+          contract_type: contractType,
+          symbol: symbol,
+          duration: duration,
+          duration_unit: 't',
+          basis: 'stake',
+          amount: stake,
+          currency: currency || session.currency || 'USD'
         };
 
-        ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
+        if (barrier !== undefined && barrier !== null) {
+          parameters.barrier = String(barrier);
+        }
 
-          if (data.error) {
+        ws.send(JSON.stringify({
+          buy: 1,
+          price: stake,
+          parameters: parameters,
+          req_id: 2
+        }));
+      };
+
+      ws.onopen = () => {
+        if (authReqPayload) {
+          ws.send(JSON.stringify(authReqPayload));
+        } else {
+          // Pre-authenticated via OTP query parameter
+          sendBuyOrder(session.currency || 'USD');
+        }
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.error) {
+          clearTimeout(timer);
+          ws.close();
+          return reject(new Error(data.error.message || 'Deriv error'));
+        }
+
+        if (data.msg_type === 'authorize') {
+          // Authorized -> Send Buy Request
+          sendBuyOrder(data.authorize?.currency || session.currency || 'USD');
+        } else if (data.msg_type === 'buy') {
+          contractBuyId = data.buy.contract_id;
+          // Subscribe to proposal open contract for this trade
+          ws.send(JSON.stringify({
+            proposal_open_contract: 1,
+            contract_id: contractBuyId,
+            subscribe: 1,
+            req_id: 3
+          }));
+        } else if (data.msg_type === 'proposal_open_contract' && data.proposal_open_contract) {
+          const poc = data.proposal_open_contract;
+          if (poc.contract_id === contractBuyId && (poc.is_expired || poc.is_sold)) {
             clearTimeout(timer);
             ws.close();
-            return reject(new Error(data.error.message || 'Deriv error'));
+
+            const won = poc.status === 'won';
+            const profit = poc.profit;
+            const exitTick = poc.exit_tick_display_value;
+            const exitDigit = exitTick ? parseInt(exitTick.slice(-1), 10) : null;
+
+            resolve({
+              contractId: poc.contract_id,
+              won,
+              profit,
+              payout: poc.payout,
+              buyPrice: poc.buy_price,
+              exitTick,
+              exitDigit,
+              status: poc.status
+            });
           }
+        }
+      };
 
-          if (data.msg_type === 'authorize') {
-            // Authorized -> Send Buy Request
-            const parameters = {
-              contract_type: contractType,
-              symbol: symbol,
-              duration: duration,
-              duration_unit: 't',
-              basis: 'stake',
-              amount: stake,
-              currency: data.authorize?.currency || session.currency || 'USD'
-            };
+      ws.onerror = (err) => {
+        clearTimeout(timer);
+        reject(new Error(`Deriv WS connection failed during trade: ${err?.message || 'handshake error'}`));
+      };
+    });
 
-            if (barrier !== undefined && barrier !== null) {
-              parameters.barrier = String(barrier);
-            }
+    const tradeResult = await tradePromise;
+    res.statusCode = 200;
+    res.end(JSON.stringify(tradeResult));
+  } catch (err) {
+    console.error('Trade execution error:', err);
+    res.statusCode = 500;
+    res.end(JSON.stringify({ error: err.message }));
+  }
+}
 
-            ws.send(JSON.stringify({
-              buy: 1,
-              price: stake,
-              parameters: parameters,
-              req_id: 2
-            }));
-          } else if (data.msg_type === 'buy') {
-            contractBuyId = data.buy.contract_id;
-            // Subscribe to proposal open contract for this trade
-            ws.send(JSON.stringify({
-              proposal_open_contract: 1,
-              contract_id: contractBuyId,
-              subscribe: 1,
-              req_id: 3
-            }));
-          } else if (data.msg_type === 'proposal_open_contract' && data.proposal_open_contract) {
-            const poc = data.proposal_open_contract;
-            if (poc.contract_id === contractBuyId && (poc.is_expired || poc.is_sold)) {
-              clearTimeout(timer);
-              ws.close();
+/**
+ * Helper to request One-Time Password (OTP) for authenticated WebSocket trade execution
+ * (Official Deriv Options REST Architecture for OAuth 2.0 PKCE JWT Bearer tokens)
+ */
+export async function getDerivAccountOtp(accountId, accessToken) {
+  let cleanAccountId = accountId;
 
-              const won = poc.status === 'won';
-              const profit = poc.profit;
-              const exitTick = poc.exit_tick_display_value;
-              const exitDigit = exitTick ? parseInt(exitTick.slice(-1), 10) : null;
-
-              resolve({
-                contractId: poc.contract_id,
-                won,
-                profit,
-                payout: poc.payout,
-                buyPrice: poc.buy_price,
-                exitTick,
-                exitDigit,
-                status: poc.status
-              });
-            }
-          }
-        };
-
-        ws.onerror = (err) => {
-          clearTimeout(timer);
-          reject(new Error(`Deriv WS connection failed during trade: ${err?.message || 'handshake error'}`));
-        };
+  // If active accountId is not yet resolved or is placeholder, query options accounts
+  if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
+    try {
+      const accRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+        headers: {
+          'Deriv-App-ID': DERIV_WS_APP_ID,
+          'Authorization': `Bearer ${accessToken}`
+        }
       });
-
-      const tradeResult = await tradePromise;
-      res.statusCode = 200;
-      res.end(JSON.stringify(tradeResult));
-    } catch (err) {
-      console.error('Trade execution error:', err);
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: err.message }));
+      if (accRes.ok) {
+        const accList = await accRes.json();
+        if (Array.isArray(accList) && accList.length > 0) {
+          const demo = accList.find(a => a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'));
+          cleanAccountId = demo ? (demo.id || demo.loginid) : (accList[0].id || accList[0].loginid);
+        }
+      }
+    } catch (e) {
+      console.warn('Account resolution for OTP warning:', e.message);
     }
+  }
+
+  if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
+    throw new Error('Unable to resolve active Deriv trading account ID for OTP acquisition.');
+  }
+
+  const endpoint = `https://api.derivws.com/trading/v1/options/accounts/${encodeURIComponent(cleanAccountId)}/otp`;
+  const otpRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Deriv-App-ID': DERIV_WS_APP_ID,
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (!otpRes.ok) {
+    const errText = await otpRes.text();
+    throw new Error(`Deriv OTP acquisition error (${otpRes.status}): ${errText}`);
+  }
+
+  return otpRes.json();
 }

@@ -3,11 +3,11 @@ import { Terminal, Pause, Play, Download, Trash2 } from 'lucide-react';
 
 export const LogTerminal = ({ logs, onClearLogs }) => {
   const [autoScroll, setAutoScroll] = useState(true);
-  const terminalEndRef = useRef(null);
+  const terminalBodyRef = useRef(null);
 
   useEffect(() => {
-    if (autoScroll && terminalEndRef.current) {
-      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (autoScroll && terminalBodyRef.current) {
+      terminalBodyRef.current.scrollTop = terminalBodyRef.current.scrollHeight;
     }
   }, [logs, autoScroll]);
 
@@ -92,7 +92,9 @@ export const LogTerminal = ({ logs, onClearLogs }) => {
       </div>
 
       {/* Terminal Body */}
-      <div style={{
+      <div
+        ref={terminalBodyRef}
+        style={{
         flex: 1,
         padding: '12px',
         fontFamily: 'var(--font-mono)',
@@ -115,7 +117,6 @@ export const LogTerminal = ({ logs, onClearLogs }) => {
             </div>
           ))
         )}
-        <div ref={terminalEndRef} />
       </div>
     </div>
   );
