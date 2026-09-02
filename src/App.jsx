@@ -364,6 +364,12 @@ export function App() {
           onStopBot={handleStopBot}
           onClearData={handleClearData}
           onLogout={handleLogout}
+          accountList={wsState.accountList}
+          currentLoginId={wsState.loginid}
+          onSelectAccount={handleSelectAccount}
+          balance={wsState.balance}
+          currency={wsState.currency}
+          isDemo={wsState.isDemo}
         />
 
         {/* RIGHT PANEL — LIVE TRADING VIEW */}

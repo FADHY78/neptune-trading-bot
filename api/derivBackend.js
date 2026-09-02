@@ -43,6 +43,34 @@ export function parseCookies(req) {
   return cookies;
 }
 
+export function extractLoginIds(legData) {
+  if (!legData) return [];
+  let list = [];
+  if (Array.isArray(legData.loginids)) {
+    list = legData.loginids;
+  } else if (Array.isArray(legData)) {
+    list = legData;
+  } else if (typeof legData === 'object') {
+    if (Array.isArray(legData.accounts)) {
+      list = legData.accounts;
+    } else {
+      const keys = Object.keys(legData);
+      const filtered = keys.filter(k => k !== 'loginids' && k !== 'accounts');
+      if (filtered.length > 0) {
+        list = filtered;
+      } else if (Array.isArray(legData[keys[0]])) {
+        list = legData[keys[0]];
+      }
+    }
+  }
+
+  return list.map(item => {
+    if (typeof item === 'string') return item.trim();
+    if (item && typeof item === 'object') return (item.id || item.loginid || '').trim();
+    return '';
+  }).filter(id => id && id !== 'loginids' && id !== 'accounts');
+}
+
 export function createSetCookieHeader(name, value, { maxAge = 86400, httpOnly = true, sameSite = 'Lax', path = '/' } = {}) {
   const parts = [`${name}=${encodeURIComponent(value)}`];
   if (maxAge !== undefined) parts.push(`Max-Age=${maxAge}`);
@@ -289,9 +317,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
         });
         if (legRes.ok) {
           const legData = await legRes.json();
-          const loginids = Array.isArray(legData)
-            ? legData.map(a => a.id || a.loginid)
-            : (legData && typeof legData === 'object' ? Object.keys(legData) : []);
+          const loginids = extractLoginIds(legData);
           if (loginids.length > 0) {
             accounts = loginids.map(id => ({
               loginid: id,
@@ -333,7 +359,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
       }
     }
 
-    // 3. If no accounts exist yet, initialize/create an Options trading account
+    // 4. If no accounts exist yet, initialize/create an Options trading account
     if (accounts.length === 0) {
       try {
         const createRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
@@ -371,6 +397,25 @@ export async function handleOAuthCallback(req, res, urlObj) {
       balance: 0
     };
     initialBalance = activeAcc.balance || initialBalance;
+
+    // Fetch live balance for active account
+    if (activeAcc && activeAcc.loginid && activeAcc.loginid !== 'VRTC_DEMO') {
+      try {
+        const balRes = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${encodeURIComponent(activeAcc.loginid)}`, {
+          headers: {
+            'Deriv-App-ID': DERIV_APP_ID,
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        if (balRes.ok) {
+          const bData = await balRes.json();
+          if (bData && bData.balance !== undefined) {
+            initialBalance = Number(bData.balance);
+            activeAcc.balance = initialBalance;
+          }
+        }
+      } catch(e) {}
+    }
 
     // Store Session in signed HTTP-only cookie
     const sessionPayload = JSON.stringify({
@@ -493,9 +538,7 @@ export async function handleAuthStatus(req, res) {
         });
         if (legRes.ok) {
           const legData = await legRes.json();
-          const loginids = Array.isArray(legData)
-            ? legData.map(a => a.id || a.loginid)
-            : (legData && typeof legData === 'object' ? Object.keys(legData) : []);
+          const loginids = extractLoginIds(legData);
           if (loginids.length > 0) {
             session.accounts = loginids.map(id => ({
               loginid: id,
@@ -508,6 +551,25 @@ export async function handleAuthStatus(req, res) {
             session.activeLoginid = session.accounts[0].loginid;
             session.isVirtual = session.accounts[0].isVirtual;
             session.currency = session.accounts[0].currency;
+
+            // Fetch live balance for active account
+            try {
+              const bRes = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${encodeURIComponent(session.activeLoginid)}`, {
+                headers: {
+                  'Deriv-App-ID': DERIV_APP_ID,
+                  'Authorization': `Bearer ${session.accessToken}`
+                }
+              });
+              if (bRes.ok) {
+                const bData = await bRes.json();
+                if (bData && bData.balance !== undefined) {
+                  liveBalance = Number(bData.balance);
+                  session.balance = liveBalance;
+                  session.accounts[0].balance = liveBalance;
+                }
+              }
+            } catch(e) {}
+
             const updatedCookie = signValue(JSON.stringify(session));
             res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
           }
@@ -925,10 +987,10 @@ export async function handleTradeBuy(req, res) {
  * (Official Deriv Options REST Architecture for OAuth 2.0 PKCE JWT Bearer tokens)
  */
 export async function getDerivAccountOtp(accountId, accessToken) {
-  let cleanAccountId = accountId;
+  let cleanAccountId = (accountId === 'loginids' || accountId === 'VRTC_DEMO') ? null : accountId;
 
   // If active accountId is not yet resolved or is placeholder, query options accounts
-  if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
+  if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO' || cleanAccountId === 'loginids') {
     // 1. Try userinfo from auth.deriv.com
     try {
       const uRes = await fetch('https://auth.deriv.com/userinfo', {
@@ -944,7 +1006,7 @@ export async function getDerivAccountOtp(accountId, accessToken) {
     } catch (e) {}
 
     // 2. Try Legacy accounts (VRTC... / CR...)
-    if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
+    if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO' || cleanAccountId === 'loginids') {
       try {
         const legRes = await fetch('https://api.derivws.com/trading/v1/options/legacy/accounts', {
           headers: {
@@ -954,9 +1016,7 @@ export async function getDerivAccountOtp(accountId, accessToken) {
         });
         if (legRes.ok) {
           const legData = await legRes.json();
-          const loginids = Array.isArray(legData)
-            ? legData.map(a => a.id || a.loginid)
-            : (legData && typeof legData === 'object' ? Object.keys(legData) : []);
+          const loginids = extractLoginIds(legData);
           if (loginids.length > 0) {
             const demo = loginids.find(id => id.startsWith('VRTC') || id.startsWith('VRT'));
             cleanAccountId = demo || loginids[0];

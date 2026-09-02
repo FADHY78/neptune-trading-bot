@@ -20,7 +20,13 @@ export const ControlPanel = ({
   onStartBot,
   onStopBot,
   onClearData,
-  onLogout
+  onLogout,
+  accountList = [],
+  currentLoginId = '',
+  onSelectAccount,
+  balance = 0,
+  currency = 'USD',
+  isDemo = true
 }) => {
   const [showToken, setShowToken] = useState(false);
   const [symbolFilter, setSymbolFilter] = useState('all'); // 'all', '1s', 'continuous', 'other'
@@ -104,30 +110,61 @@ export const ControlPanel = ({
           <>
             {isAuthorized ? (
               <div style={{
-                backgroundColor: 'rgba(0, 230, 118, 0.08)',
-                border: '1px solid rgba(0, 230, 118, 0.3)',
-                borderRadius: '6px',
-                padding: '10px 12px',
-                marginBottom: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between'
+                backgroundColor: isDemo ? 'rgba(0, 212, 255, 0.06)' : 'rgba(0, 230, 118, 0.08)',
+                border: `1px solid ${isDemo ? 'rgba(0, 212, 255, 0.25)' : 'rgba(0, 230, 118, 0.3)'}`,
+                borderRadius: '8px',
+                padding: '12px',
+                marginBottom: '14px'
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ color: 'var(--color-success)', fontSize: '12px', fontWeight: '600' }}>
-                    🔒 Deriv Secure Session Active
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span className="status-dot pulse" style={{ backgroundColor: isDemo ? 'var(--accent-cyan)' : 'var(--color-success)' }} />
+                    <span style={{ fontSize: '11px', fontWeight: '700', color: isDemo ? 'var(--accent-cyan)' : 'var(--color-success)', textTransform: 'uppercase' }}>
+                      {isDemo ? 'Demo Trading Account' : 'Real Money Account'}
+                    </span>
+                  </div>
+                  {onLogout && (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={onLogout}
+                      style={{ fontSize: '10px', padding: '3px 8px', height: 'auto' }}
+                      title="Disconnect Deriv Session"
+                    >
+                      Log Out
+                    </button>
+                  )}
+                </div>
+
+                {/* Account Selection Dropdown */}
+                {accountList && accountList.length > 0 && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                      Active Trading Account:
+                    </label>
+                    <select
+                      className="input-field font-mono"
+                      style={{ width: '100%', fontSize: '12px', padding: '6px 8px', cursor: 'pointer' }}
+                      value={currentLoginId}
+                      onChange={(e) => {
+                        const target = accountList.find(a => a.loginid === e.target.value);
+                        if (target && onSelectAccount) onSelectAccount(target);
+                      }}
+                    >
+                      {accountList.map(acc => (
+                        <option key={acc.loginid} value={acc.loginid}>
+                          {acc.isVirtual ? 'DEMO' : 'REAL'} - {acc.loginid} ({acc.currency || 'USD'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '6px' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Live Balance:</span>
+                  <span className="font-mono font-bold" style={{ color: isDemo ? 'var(--accent-cyan)' : 'var(--color-success)', fontSize: '14px' }}>
+                    ${Number(balance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency || 'USD'}
                   </span>
                 </div>
-                {onLogout && (
-                  <button
-                    className="btn btn-secondary"
-                    onClick={onLogout}
-                    style={{ fontSize: '11px', padding: '4px 8px' }}
-                    title="Disconnect Deriv Session"
-                  >
-                    Log Out
-                  </button>
-                )}
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
