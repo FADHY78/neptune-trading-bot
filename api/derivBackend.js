@@ -469,6 +469,14 @@ export async function handleAuthStatus(req, res) {
   try {
     const session = JSON.parse(sessionRaw);
 
+    // Scrub out stale invalid placeholder accounts like 'loginids' or 'VRTC_DEMO'
+    if (Array.isArray(session.accounts)) {
+      session.accounts = session.accounts.filter(a => a.loginid && a.loginid !== 'loginids' && a.loginid !== 'VRTC_DEMO');
+    }
+    if (session.activeLoginid === 'loginids' || session.activeLoginid === 'VRTC_DEMO') {
+      session.activeLoginid = (session.accounts && session.accounts.length > 0) ? session.accounts[0].loginid : null;
+    }
+
     // Refresh live balance and accounts list
     let liveBalance = session.balance ?? 0;
 
@@ -527,8 +535,8 @@ export async function handleAuthStatus(req, res) {
       console.warn('REST status refresh note:', restErr.message);
     }
 
-    // 2. Query Legacy accounts (VRTC... / CR...) if accounts empty or active is VRTC_DEMO
-    if (!session.accounts || session.accounts.length === 0 || session.activeLoginid === 'VRTC_DEMO') {
+    // 2. Query Legacy accounts (VRTC... / CR...) if accounts empty or active is VRTC_DEMO / loginids
+    if (!session.accounts || session.accounts.length === 0 || !session.activeLoginid || session.activeLoginid === 'VRTC_DEMO' || session.activeLoginid === 'loginids') {
       try {
         const legRes = await fetch('https://api.derivws.com/trading/v1/options/legacy/accounts', {
           headers: {
@@ -647,7 +655,7 @@ export async function handleAuthStatus(req, res) {
     }
 
     // If no real trading accounts found, clear ghost session and return unauthenticated
-    if (!session.accounts || session.accounts.length === 0 || session.activeLoginid === 'VRTC_DEMO') {
+    if (!session.accounts || session.accounts.length === 0 || !session.activeLoginid || session.activeLoginid === 'VRTC_DEMO' || session.activeLoginid === 'loginids') {
       res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', '', { maxAge: 0 }));
       res.statusCode = 200;
       res.end(JSON.stringify({
