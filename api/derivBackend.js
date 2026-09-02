@@ -156,7 +156,7 @@ export function handleOAuthStart(req, res, urlObj) {
     response_type: 'code',
     client_id: customClientId,
     redirect_uri: redirectUri,
-    scope: 'openid profile email trade account_manage',
+    scope: 'trade',
     state: state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256'

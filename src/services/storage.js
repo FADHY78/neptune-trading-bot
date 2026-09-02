@@ -29,7 +29,11 @@ export const loadStoredConfig = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_CONFIG;
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    if (parsed.apiToken && parsed.apiToken.includes('a9e587db13e86cfdad0bc1aae8af0d9cb004f1777dea2c4bed46cb69fe64977a')) {
+      parsed.apiToken = '';
+    }
+    return { ...DEFAULT_CONFIG, ...parsed };
   } catch (e) {
     console.error('Failed to load config from storage', e);
     return DEFAULT_CONFIG;
