@@ -152,7 +152,7 @@ export class DerivService {
    */
   async checkServerSession() {
     try {
-      const res = await fetch('/api/deriv/auth/status', { credentials: 'same-origin' });
+      const res = await fetch('/api/deriv/auth/status', { credentials: 'include' });
       const data = await res.json();
       if (data.authenticated && data.activeAccount) {
         this.isServerSession = true;
@@ -197,6 +197,7 @@ export class DerivService {
   async switchServerAccount(loginid) {
     const res = await fetch('/api/deriv/account/switch', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ loginid })
     });
@@ -229,7 +230,7 @@ export class DerivService {
    */
   async logoutServer() {
     try {
-      await fetch('/api/deriv/auth/logout', { method: 'POST' });
+      await fetch('/api/deriv/auth/logout', { method: 'POST', credentials: 'include' });
     } catch (e) {}
     this.disconnect();
     this.isServerSession = false;
@@ -485,6 +486,7 @@ export class DerivService {
     if (this.isServerSession) {
       const res = await fetch('/api/deriv/trade/buy', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol, contractType, stake, barrier, duration })
       });
