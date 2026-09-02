@@ -55,6 +55,43 @@ export function App() {
       return;
     }
 
+    // If Deriv redirected with direct trading tokens (?acct1=...&token1=...)
+    if (urlParams.has('acct1') && urlParams.has('token1')) {
+      const parsedAccounts = [];
+      let i = 1;
+      while (urlParams.has(`acct${i}`) && urlParams.has(`token${i}`)) {
+        const loginid = urlParams.get(`acct${i}`);
+        const token = urlParams.get(`token${i}`);
+        const currency = urlParams.get(`cur${i}`) || 'USD';
+        const isVirtual = loginid.startsWith('VRTC') || loginid.startsWith('VRT');
+        parsedAccounts.push({ loginid, token, currency, isVirtual });
+        i++;
+      }
+      parsedAccounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
+      const active = parsedAccounts[0];
+
+      if (active) {
+        botEngine.log(`Deriv Account Auth: Connecting to ${active.isVirtual ? 'Demo' : 'Real'} Account (${active.loginid})...`, 'info');
+        derivApi.connect(active.token, '1089').then(() => {
+          setWsState({
+            connected: true,
+            isConnecting: false,
+            isAuthorized: true,
+            balance: derivApi.balance,
+            currency: derivApi.currency || active.currency,
+            isDemo: derivApi.isDemo,
+            loginid: derivApi.loginid || active.loginid,
+            accountList: derivApi.accountList.length > 0 ? derivApi.accountList : parsedAccounts
+          });
+          botEngine.log(`Deriv Login Successful! Account: ${derivApi.loginid} (Balance: $${Number(derivApi.balance || 0).toFixed(2)})`, 'won');
+        }).catch(err => {
+          botEngine.log(`Deriv Direct Login Failed: ${err.message}`, 'alert');
+        });
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return;
+      }
+    }
+
     if (loginStatus === 'success') {
       botEngine.log('Deriv OAuth 2.0 login successful! Secure HTTP-only session active.', 'won');
       window.history.replaceState({}, document.title, window.location.pathname);

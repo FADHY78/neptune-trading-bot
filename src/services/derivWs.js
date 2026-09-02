@@ -311,8 +311,12 @@ export class DerivService {
   }
 
   async authorize(token) {
-    this.token = token;
-    const res = await this.send({ authorize: token });
+    let cleanToken = String(token || '').trim();
+    if (cleanToken.startsWith('Bearer ')) {
+      cleanToken = cleanToken.slice(7).trim();
+    }
+    this.token = cleanToken;
+    const res = await this.send({ authorize: cleanToken });
 
     if (res.error) {
       this.authorized = false;

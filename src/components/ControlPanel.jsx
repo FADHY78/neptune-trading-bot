@@ -178,13 +178,13 @@ export const ControlPanel = ({
 
             <div className="input-group">
               <label className="input-label">
-                <span>Client ID / App ID</span>
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Default: 34hP1yTdG6Hc7grRIWQWH</span>
+                <span>App ID (Deriv WebSocket)</span>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Default: 1089</span>
               </label>
               <input
                 type="text"
                 className="input-field font-mono"
-                placeholder="34hP1yTdG6Hc7grRIWQWH"
+                placeholder="1089"
                 value={config.appId}
                 onChange={(e) => handleInputChange('appId', e.target.value)}
               />
