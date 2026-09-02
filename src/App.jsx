@@ -71,7 +71,12 @@ export function App() {
       const active = parsedAccounts[0];
 
       if (active) {
-        botEngine.log(`Deriv Account Auth: Connecting to ${active.isVirtual ? 'Demo' : 'Real'} Account (${active.loginid})...`, 'info');
+        localStorage.setItem('deriv_accounts', JSON.stringify(parsedAccounts));
+        const updatedConfig = { ...config, apiToken: active.token, currency: active.currency };
+        setConfig(updatedConfig);
+        saveStoredConfig(updatedConfig);
+
+        botEngine.log(`Deriv Official Auth: Connecting to ${active.isVirtual ? 'Demo' : 'Real'} Account (${active.loginid})...`, 'info');
         derivApi.connect(active.token, '1089').then(() => {
           setWsState({
             connected: true,
@@ -100,6 +105,36 @@ export function App() {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
+    // Check saved accounts in localStorage from previous Deriv OAuth login
+    const savedAccountsRaw = localStorage.getItem('deriv_accounts');
+    if (savedAccountsRaw && !urlParams.has('acct1')) {
+      try {
+        const savedAccounts = JSON.parse(savedAccountsRaw);
+        if (Array.isArray(savedAccounts) && savedAccounts.length > 0) {
+          const active = savedAccounts.find(a => a.token === config.apiToken) || savedAccounts[0];
+          if (active && active.token) {
+            setWsState(prev => ({ ...prev, isConnecting: true }));
+            derivApi.connect(active.token, '1089').then(() => {
+              setWsState({
+                connected: true,
+                isConnecting: false,
+                isAuthorized: true,
+                balance: derivApi.balance,
+                currency: derivApi.currency || active.currency,
+                isDemo: derivApi.isDemo,
+                loginid: derivApi.loginid || active.loginid,
+                accountList: derivApi.accountList.length > 0 ? derivApi.accountList : savedAccounts
+              });
+              botEngine.log(`Deriv Account Session Active: ${derivApi.loginid} (${derivApi.isDemo ? 'Demo' : 'Real'}) - Balance: $${Number(derivApi.balance || 0).toFixed(2)}`, 'won');
+            }).catch(() => {
+              setWsState(prev => ({ ...prev, isConnecting: false }));
+            });
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+
     // Check for active server session (Digit Atlas secure HTTP-only cookie)
     setWsState(prev => ({ ...prev, isConnecting: true }));
     derivApi.checkServerSession().then((sessionRes) => {
@@ -124,31 +159,21 @@ export function App() {
     });
   }, []);
 
-  const handleDerivOAuthLogin = async () => {
-    try {
-      const url = await getDerivOAuth2Url({
-        clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH'
-      });
-      window.location.href = url;
-    } catch (e) {
-      botEngine.log(`Failed to initiate Deriv OAuth: ${e.message}`, 'alert');
-    }
+  const handleDerivOAuthLogin = () => {
+    const numericAppId = /^\d+$/.test(String(config.appId || '').trim()) ? String(config.appId).trim() : '1089';
+    botEngine.log(`Redirecting to official Deriv Trading OAuth (App ID: ${numericAppId})...`, 'info');
+    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${numericAppId}&l=en`;
   };
 
-  const handleDerivOAuthSignUp = async () => {
-    try {
-      const url = await getDerivOAuth2Url({
-        clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH',
-        isSignUp: true
-      });
-      window.location.href = url;
-    } catch (e) {
-      botEngine.log(`Failed to initiate Deriv Sign Up: ${e.message}`, 'alert');
-    }
+  const handleDerivOAuthSignUp = () => {
+    const numericAppId = /^\d+$/.test(String(config.appId || '').trim()) ? String(config.appId).trim() : '1089';
+    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${numericAppId}&l=en&prompt=signup`;
   };
 
   const handleLogout = async () => {
     botEngine.log('Logging out from Deriv session...', 'info');
+    localStorage.removeItem('deriv_accounts');
+    derivApi.disconnect();
     await derivApi.logoutServer();
     setWsState({
       connected: false,
@@ -160,7 +185,7 @@ export function App() {
       loginid: '',
       accountList: []
     });
-    botEngine.log('Deriv session closed.', 'info');
+    botEngine.log('Deriv session terminated. Click "Log in with Deriv" to connect.', 'info');
   };
 
   // Subscribe to Bot Engine Updates
