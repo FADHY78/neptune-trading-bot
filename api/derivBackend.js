@@ -336,7 +336,7 @@ export async function handleOAuthCallback(req, res, urlObj) {
       }
     }
 
-    // 3. Query Options REST accounts
+    // 3. Query Options REST accounts — response: { data: [{account_id, balance, currency, account_type, ...}] }
     if (accounts.length === 0) {
       try {
         const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
@@ -346,14 +346,15 @@ export async function handleOAuthCallback(req, res, urlObj) {
           }
         });
         if (restRes.ok) {
-          const restList = await restRes.json();
-          if (Array.isArray(restList) && restList.length > 0) {
+          const restBody = await restRes.json();
+          const restList = Array.isArray(restBody) ? restBody : (Array.isArray(restBody?.data) ? restBody.data : []);
+          if (restList.length > 0) {
             accounts = restList.map(a => ({
-              loginid: a.id || a.loginid,
+              loginid: a.account_id || a.id || a.loginid,
               currency: a.currency || 'USD',
-              isVirtual: a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'),
+              isVirtual: a.account_type === 'demo' || a.type === 'demo' || String(a.account_id || a.id || a.loginid).startsWith('VRTC'),
               balance: Number(a.balance || 0),
-              disabled: false
+              disabled: a.status === 'inactive'
             }));
           }
         }
@@ -375,14 +376,16 @@ export async function handleOAuthCallback(req, res, urlObj) {
           body: JSON.stringify({})
         });
         if (createRes.ok) {
-          const newAcc = await createRes.json();
-          if (newAcc && (newAcc.id || newAcc.loginid)) {
+          const createBody = await createRes.json();
+          // POST response may be single account or { data: account }
+          const newAcc = createBody?.data || createBody;
+          if (newAcc && (newAcc.account_id || newAcc.id || newAcc.loginid)) {
             accounts = [{
-              loginid: newAcc.id || newAcc.loginid,
+              loginid: newAcc.account_id || newAcc.id || newAcc.loginid,
               currency: newAcc.currency || 'USD',
-              isVirtual: newAcc.type === 'demo' || String(newAcc.id || newAcc.loginid).startsWith('VRTC'),
+              isVirtual: newAcc.account_type === 'demo' || newAcc.type === 'demo',
               balance: Number(newAcc.balance || 0),
-              disabled: false
+              disabled: newAcc.status === 'inactive'
             }];
           }
         }
@@ -484,7 +487,7 @@ export async function handleAuthStatus(req, res) {
     // Refresh live balance and accounts list
     let liveBalance = session.balance ?? 0;
 
-    // 1. Deriv Options REST API (supports Bearer JWT tokens from OAuth 2.0 PKCE)
+    // 1. Deriv Options REST API — response: { data: [{account_id, balance, currency, account_type, ...}] }
     try {
       const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
         headers: {
@@ -493,10 +496,11 @@ export async function handleAuthStatus(req, res) {
         }
       });
       if (restRes.ok) {
-        let restList = await restRes.json();
+        const restBody = await restRes.json();
+        let restList = Array.isArray(restBody) ? restBody : (Array.isArray(restBody?.data) ? restBody.data : []);
 
         // If list is empty, initialize/create options account
-        if (!Array.isArray(restList) || restList.length === 0) {
+        if (restList.length === 0) {
           const cRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
             method: 'POST',
             headers: {
@@ -507,18 +511,21 @@ export async function handleAuthStatus(req, res) {
             body: JSON.stringify({})
           });
           if (cRes.ok) {
-            const created = await cRes.json();
-            if (created && (created.id || created.loginid)) restList = [created];
+            const createBody = await cRes.json();
+            const created = createBody?.data || createBody;
+            if (created && (created.account_id || created.id || created.loginid)) {
+              restList = [created];
+            }
           }
         }
 
-        if (Array.isArray(restList) && restList.length > 0) {
+        if (restList.length > 0) {
           session.accounts = restList.map(a => ({
-            loginid: a.id || a.loginid,
+            loginid: a.account_id || a.id || a.loginid,
             currency: a.currency || 'USD',
-            isVirtual: a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'),
+            isVirtual: a.account_type === 'demo' || a.type === 'demo' || String(a.account_id || a.id || a.loginid).startsWith('VRTC'),
             balance: Number(a.balance || 0),
-            disabled: false
+            disabled: a.status === 'inactive'
           }));
 
           session.accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
@@ -1054,10 +1061,11 @@ export async function getDerivAccountOtp(accountId, accessToken) {
           }
         });
         if (accRes.ok) {
-          let accList = await accRes.json();
+          const accBody = await accRes.json();
+          let accList = Array.isArray(accBody) ? accBody : (Array.isArray(accBody?.data) ? accBody.data : []);
 
           // If empty, initialize/create options account
-          if (!Array.isArray(accList) || accList.length === 0) {
+          if (accList.length === 0) {
             const cRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
               method: 'POST',
               headers: {
@@ -1068,14 +1076,17 @@ export async function getDerivAccountOtp(accountId, accessToken) {
               body: JSON.stringify({})
             });
             if (cRes.ok) {
-              const created = await cRes.json();
-              if (created && (created.id || created.loginid)) accList = [created];
+              const createBody = await cRes.json();
+              const created = createBody?.data || createBody;
+              if (created && (created.account_id || created.id || created.loginid)) accList = [created];
             }
           }
 
-          if (Array.isArray(accList) && accList.length > 0) {
-            const demo = accList.find(a => a.type === 'demo' || String(a.id || a.loginid).startsWith('VRTC'));
-            cleanAccountId = demo ? (demo.id || demo.loginid) : (accList[0].id || accList[0].loginid);
+          if (accList.length > 0) {
+            // Per official docs: account_type = "demo" | "real", account_id is the identifier
+            const demo = accList.find(a => a.account_type === 'demo' || a.type === 'demo' || String(a.account_id || a.id || a.loginid).startsWith('VRTC'));
+            const target = demo || accList[0];
+            cleanAccountId = target.account_id || target.id || target.loginid;
           }
         }
       } catch (e) {
