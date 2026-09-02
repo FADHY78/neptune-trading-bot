@@ -280,50 +280,11 @@ export class DerivService {
 export const derivApi = new DerivService();
 
 /**
- * Generate Deriv OAuth 2.0 Authorization URL
- * Official Spec: https://developers.deriv.com/docs/intro/oauth/
+ * Generate Deriv OAuth 2.0 Login URL for Deriv WebSocket API
  */
-export const getDerivOAuthUrl = async (appId = '34hP1yTdG6Hc7grRIWQWH', redirectUri = typeof window !== 'undefined' ? window.location.origin + '/' : 'https://neptune-trading-bot.vercel.app/') => {
-  const clientId = appId || '34hP1yTdG6Hc7grRIWQWH';
-  
-  try {
-    // 1. Generate random PKCE code_verifier
-    const array = crypto.getRandomValues(new Uint8Array(64));
-    const codeVerifier = Array.from(array)
-      .map(v => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'[v % 66])
-      .join('');
-
-    // 2. Derive code_challenge = BASE64URL(SHA256(verifier))
-    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
-    const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(hash)))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-
-    // 3. Generate CSRF state
-    const state = Array.from(crypto.getRandomValues(new Uint8Array(16)))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-
-    // 4. Store in sessionStorage
-    sessionStorage.setItem('pkce_code_verifier', codeVerifier);
-    sessionStorage.setItem('oauth_state', state);
-
-    // 5. Build official auth.deriv.com URL
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      scope: 'trade account_manage',
-      state: state,
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256'
-    });
-
-    return `https://auth.deriv.com/oauth2/auth?${params.toString()}`;
-  } catch (e) {
-    return `https://auth.deriv.com/oauth2/auth?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=trade+account_manage`;
-  }
+export const getDerivOAuthUrl = (appId = '1089') => {
+  const cleanAppId = /^\d+$/.test(String(appId).trim()) ? String(appId).trim() : '1089';
+  return `https://oauth.deriv.com/oauth2/authorize?app_id=${cleanAppId}&l=en`;
 };
 
 /**
