@@ -105,36 +105,6 @@ export function App() {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    // Check saved accounts in localStorage from previous Deriv OAuth login
-    const savedAccountsRaw = localStorage.getItem('deriv_accounts');
-    if (savedAccountsRaw && !urlParams.has('acct1')) {
-      try {
-        const savedAccounts = JSON.parse(savedAccountsRaw);
-        if (Array.isArray(savedAccounts) && savedAccounts.length > 0) {
-          const active = savedAccounts.find(a => a.token === config.apiToken) || savedAccounts[0];
-          if (active && active.token) {
-            setWsState(prev => ({ ...prev, isConnecting: true }));
-            derivApi.connect(active.token, '1089').then(() => {
-              setWsState({
-                connected: true,
-                isConnecting: false,
-                isAuthorized: true,
-                balance: derivApi.balance,
-                currency: derivApi.currency || active.currency,
-                isDemo: derivApi.isDemo,
-                loginid: derivApi.loginid || active.loginid,
-                accountList: derivApi.accountList.length > 0 ? derivApi.accountList : savedAccounts
-              });
-              botEngine.log(`Deriv Account Session Active: ${derivApi.loginid} (${derivApi.isDemo ? 'Demo' : 'Real'}) - Balance: $${Number(derivApi.balance || 0).toFixed(2)}`, 'won');
-            }).catch(() => {
-              setWsState(prev => ({ ...prev, isConnecting: false }));
-            });
-            return;
-          }
-        }
-      } catch (e) {}
-    }
-
     // Check for active server session (Digit Atlas secure HTTP-only cookie)
     setWsState(prev => ({ ...prev, isConnecting: true }));
     derivApi.checkServerSession().then((sessionRes) => {
@@ -160,14 +130,11 @@ export function App() {
   }, []);
 
   const handleDerivOAuthLogin = () => {
-    const numericAppId = /^\d+$/.test(String(config.appId || '').trim()) ? String(config.appId).trim() : '1089';
-    botEngine.log(`Redirecting to official Deriv Trading OAuth (App ID: ${numericAppId})...`, 'info');
-    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${numericAppId}&l=en`;
+    window.location.href = '/api/deriv/oauth/start';
   };
 
   const handleDerivOAuthSignUp = () => {
-    const numericAppId = /^\d+$/.test(String(config.appId || '').trim()) ? String(config.appId).trim() : '1089';
-    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${numericAppId}&l=en&prompt=signup`;
+    window.location.href = '/api/deriv/oauth/start?signup=true';
   };
 
   const handleLogout = async () => {
