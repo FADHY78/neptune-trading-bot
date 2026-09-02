@@ -116,12 +116,7 @@ export function App() {
         });
         botEngine.log(`Deriv Secure Session active (${sessionRes.activeAccount.isVirtual ? 'Demo Account' : 'Real Account'}) - Login ID: ${sessionRes.activeAccount.loginid}`, 'won');
       } else {
-        // Fallback: check manual API token in local config
-        if (config.apiToken && !config.simulationMode) {
-          handleConnectDeriv();
-        } else {
-          setWsState(prev => ({ ...prev, isConnecting: false }));
-        }
+        setWsState(prev => ({ ...prev, isConnecting: false }));
       }
     }).catch((err) => {
       console.warn('Session check warning:', err);

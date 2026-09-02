@@ -278,7 +278,36 @@ export async function handleOAuthCallback(req, res, urlObj) {
       console.warn('Userinfo lookup note:', uErr.message);
     }
 
-    // 2. Query Options REST accounts
+    // 2. Query Legacy accounts (VRTC... / CR...)
+    if (accounts.length === 0) {
+      try {
+        const legRes = await fetch('https://api.derivws.com/trading/v1/options/legacy/accounts', {
+          headers: {
+            'Deriv-App-ID': DERIV_APP_ID,
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        if (legRes.ok) {
+          const legData = await legRes.json();
+          const loginids = Array.isArray(legData)
+            ? legData.map(a => a.id || a.loginid)
+            : (legData && typeof legData === 'object' ? Object.keys(legData) : []);
+          if (loginids.length > 0) {
+            accounts = loginids.map(id => ({
+              loginid: id,
+              currency: 'USD',
+              isVirtual: id.startsWith('VRTC') || id.startsWith('VRT'),
+              balance: 0,
+              disabled: false
+            }));
+          }
+        }
+      } catch (legErr) {
+        console.warn('Legacy accounts discovery note:', legErr.message);
+      }
+    }
+
+    // 3. Query Options REST accounts
     if (accounts.length === 0) {
       try {
         const restRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
@@ -453,7 +482,40 @@ export async function handleAuthStatus(req, res) {
       console.warn('REST status refresh note:', restErr.message);
     }
 
-    // 2. Query userinfo from auth.deriv.com if accounts still empty or active is VRTC_DEMO
+    // 2. Query Legacy accounts (VRTC... / CR...) if accounts empty or active is VRTC_DEMO
+    if (!session.accounts || session.accounts.length === 0 || session.activeLoginid === 'VRTC_DEMO') {
+      try {
+        const legRes = await fetch('https://api.derivws.com/trading/v1/options/legacy/accounts', {
+          headers: {
+            'Deriv-App-ID': DERIV_APP_ID,
+            'Authorization': `Bearer ${session.accessToken}`
+          }
+        });
+        if (legRes.ok) {
+          const legData = await legRes.json();
+          const loginids = Array.isArray(legData)
+            ? legData.map(a => a.id || a.loginid)
+            : (legData && typeof legData === 'object' ? Object.keys(legData) : []);
+          if (loginids.length > 0) {
+            session.accounts = loginids.map(id => ({
+              loginid: id,
+              currency: 'USD',
+              isVirtual: id.startsWith('VRTC') || id.startsWith('VRT'),
+              balance: 0,
+              disabled: false
+            }));
+            session.accounts.sort((a, b) => (b.isVirtual ? 1 : 0) - (a.isVirtual ? 1 : 0));
+            session.activeLoginid = session.accounts[0].loginid;
+            session.isVirtual = session.accounts[0].isVirtual;
+            session.currency = session.accounts[0].currency;
+            const updatedCookie = signValue(JSON.stringify(session));
+            res.setHeader('Set-Cookie', createSetCookieHeader('deriv_access_session', updatedCookie, { maxAge: 7 * 86400 }));
+          }
+        }
+      } catch (legErr) {}
+    }
+
+    // 3. Query userinfo from auth.deriv.com if accounts still empty or active is VRTC_DEMO
     if (!session.accounts || session.accounts.length === 0 || session.activeLoginid === 'VRTC_DEMO') {
       try {
         const uRes = await fetch('https://auth.deriv.com/userinfo', {
@@ -881,7 +943,29 @@ export async function getDerivAccountOtp(accountId, accessToken) {
       }
     } catch (e) {}
 
-    // 2. Try Options REST accounts
+    // 2. Try Legacy accounts (VRTC... / CR...)
+    if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
+      try {
+        const legRes = await fetch('https://api.derivws.com/trading/v1/options/legacy/accounts', {
+          headers: {
+            'Deriv-App-ID': DERIV_APP_ID,
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        if (legRes.ok) {
+          const legData = await legRes.json();
+          const loginids = Array.isArray(legData)
+            ? legData.map(a => a.id || a.loginid)
+            : (legData && typeof legData === 'object' ? Object.keys(legData) : []);
+          if (loginids.length > 0) {
+            const demo = loginids.find(id => id.startsWith('VRTC') || id.startsWith('VRT'));
+            cleanAccountId = demo || loginids[0];
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Try Options REST accounts
     if (!cleanAccountId || cleanAccountId === 'VRTC_DEMO') {
       try {
         const accRes = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
