@@ -12,6 +12,7 @@ export const ControlPanel = ({
   onOAuthLogin,
   onOAuthSignUp,
   onConnectDeriv,
+  availableSymbols = [],
   isConnecting,
   isConnected,
   isAuthorized,
@@ -21,6 +22,7 @@ export const ControlPanel = ({
   onClearData
 }) => {
   const [showToken, setShowToken] = useState(false);
+  const [symbolFilter, setSymbolFilter] = useState('all'); // 'all', '1s', 'continuous', 'other'
 
   const handleInputChange = (field, value) => {
     onChangeConfig({ ...config, [field]: value });
@@ -295,26 +297,122 @@ export const ControlPanel = ({
 
       {/* D. Active Symbols Grid */}
       <div className="card" style={{ padding: '14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: '700', color: 'var(--accent-cyan)', marginBottom: '10px' }}>
-          <Layers size={16} />
-          <span>Active Symbols (Checkboxes Grid)</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: '700', color: 'var(--accent-cyan)' }}>
+            <Layers size={16} />
+            <span>Active Symbols ({config.activeSymbols?.length || 0} Selected)</span>
+          </div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ fontSize: '10px', padding: '3px 8px' }}
+              onClick={() => {
+                const allSyms = (availableSymbols && availableSymbols.length > 0 ? availableSymbols : DERIV_SYMBOLS)
+                  .filter(s => s.symbol.startsWith('1HZ'))
+                  .map(s => s.symbol);
+                onChangeConfig({ ...config, activeSymbols: allSyms });
+              }}
+              disabled={isRunning}
+            >
+              Select (1s)
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ fontSize: '10px', padding: '3px 8px' }}
+              onClick={() => {
+                const allSyms = (availableSymbols && availableSymbols.length > 0 ? availableSymbols : DERIV_SYMBOLS)
+                  .map(s => s.symbol);
+                onChangeConfig({ ...config, activeSymbols: allSyms });
+              }}
+              disabled={isRunning}
+            >
+              Select All
+            </button>
+          </div>
         </div>
 
-        <div className="checkbox-grid">
-          {DERIV_SYMBOLS.slice(0, 8).map((sym) => {
-            const checked = (config.activeSymbols || []).includes(sym.symbol);
-            return (
-              <label key={sym.symbol} className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => handleSymbolToggle(sym.symbol)}
-                  disabled={isRunning}
-                />
-                <span className="font-mono" style={{ fontSize: '11px' }}>{sym.symbol}</span>
-              </label>
-            );
-          })}
+        {/* Category Tabs */}
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
+          {['all', '1s', 'continuous', 'step_jump'].map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              onClick={() => setSymbolFilter(cat)}
+              style={{
+                fontSize: '10px',
+                padding: '3px 8px',
+                borderRadius: '4px',
+                border: '1px solid var(--border-color)',
+                backgroundColor: symbolFilter === cat ? 'var(--accent-cyan)' : 'var(--bg-input)',
+                color: symbolFilter === cat ? '#040914' : 'var(--text-secondary)',
+                fontWeight: symbolFilter === cat ? '700' : '500',
+                cursor: 'pointer'
+              }}
+            >
+              {cat === 'all' ? 'All Synthetic' : cat === '1s' ? 'Volatility (1s)' : cat === 'continuous' ? 'Standard Vol' : 'Step / Jump'}
+            </button>
+          ))}
+        </div>
+
+        {/* Symbols List */}
+        <div style={{
+          maxHeight: '220px',
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '4px',
+          paddingRight: '4px'
+        }}>
+          {(availableSymbols && availableSymbols.length > 0 ? availableSymbols : DERIV_SYMBOLS)
+            .filter((sym) => {
+              if (symbolFilter === '1s') return sym.symbol.startsWith('1HZ');
+              if (symbolFilter === 'continuous') return sym.symbol.startsWith('R_');
+              if (symbolFilter === 'step_jump') return sym.symbol.startsWith('JD') || sym.symbol.startsWith('stp') || sym.symbol.startsWith('BOOM') || sym.symbol.startsWith('CRASH');
+              return true;
+            })
+            .map((sym) => {
+              const isChecked = (config.activeSymbols || []).includes(sym.symbol);
+              return (
+                <label 
+                  key={sym.symbol} 
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '6px 8px',
+                    borderRadius: '4px',
+                    backgroundColor: isChecked ? 'rgba(0, 212, 255, 0.08)' : 'var(--bg-input)',
+                    border: `1px solid ${isChecked ? 'rgba(0, 212, 255, 0.3)' : 'var(--border-color)'}`,
+                    cursor: isRunning ? 'not-allowed' : 'pointer',
+                    userSelect: 'none'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleSymbolToggle(sym.symbol)}
+                      disabled={isRunning}
+                    />
+                    <div>
+                      <span className="font-mono" style={{ fontSize: '11px', fontWeight: '700', color: isChecked ? 'var(--accent-cyan)' : 'var(--text-primary)' }}>
+                        {sym.symbol}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                        {sym.name || sym.display_name}
+                      </span>
+                    </div>
+                  </div>
+                  {sym.category && (
+                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-card)', padding: '2px 6px', borderRadius: '3px' }}>
+                      {sym.category}
+                    </span>
+                  )}
+                </label>
+              );
+            })}
         </div>
       </div>
 

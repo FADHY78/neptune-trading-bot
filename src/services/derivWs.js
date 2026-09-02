@@ -11,9 +11,12 @@ export class DerivService {
     this.connected = false;
     this.authorized = false;
     this.accountInfo = null;
+    this.accountList = [];
+    this.loginid = '';
     this.balance = 0;
     this.currency = 'USD';
     this.isDemo = true;
+    this.availableSymbols = [];
     
     this.callbacks = {
       onConnect: [],
@@ -22,6 +25,7 @@ export class DerivService {
       onBalance: [],
       onTick: [],
       onContractResult: [],
+      onSymbols: [],
       onError: []
     };
 
@@ -127,22 +131,90 @@ export class DerivService {
 
     this.authorized = true;
     this.accountInfo = res.authorize;
-    this.balance = res.authorize.balance;
-    this.currency = res.authorize.currency;
+    this.loginid = res.authorize.loginid || '';
+    this.balance = res.authorize.balance || 0;
+    this.currency = res.authorize.currency || 'USD';
     this.isDemo = Boolean(res.authorize.is_virtual);
+    
+    // Parse account list (Real and Demo accounts associated with this user)
+    const rawAccountList = res.authorize.account_list || [];
+    this.accountList = rawAccountList.map(acc => ({
+      loginid: acc.loginid,
+      currency: acc.currency,
+      isVirtual: Boolean(acc.is_virtual),
+      disabled: Boolean(acc.is_disabled),
+      landingCompany: acc.landing_company_name,
+      token: acc.token || '' // present in multi-token responses
+    }));
 
     this.emit('onAuthorize', {
       email: res.authorize.email,
       balance: res.authorize.balance,
       currency: res.authorize.currency,
       isVirtual: res.authorize.is_virtual,
-      loginid: res.authorize.loginid
+      loginid: res.authorize.loginid,
+      fullname: res.authorize.fullname,
+      accountList: this.accountList
     });
 
     // Subscribe to balance updates
     this.subscribeBalance();
 
+    // Fetch active symbols dynamically from Deriv
+    this.fetchActiveSymbols();
+
     return res.authorize;
+  }
+
+  async fetchActiveSymbols() {
+    try {
+      const res = await this.send({
+        active_symbols: 'brief',
+        product_type: 'basic'
+      });
+
+      if (res && res.active_symbols) {
+        // Filter synthetic & available volatility / jump / crash symbols
+        const symbols = res.active_symbols.map(s => ({
+          symbol: s.symbol,
+          name: s.display_name,
+          market: s.market,
+          marketDisplayName: s.market_display_name,
+          submarket: s.submarket,
+          submarketDisplayName: s.submarket_display_name,
+          category: s.submarket_display_name || s.market_display_name || 'Synthetics',
+          isOpen: Boolean(s.exchange_is_open)
+        }));
+
+        this.availableSymbols = symbols;
+        this.emit('onSymbols', symbols);
+        return symbols;
+      }
+    } catch (e) {
+      console.warn('Could not fetch active symbols, using fallback catalog:', e);
+    }
+    return [];
+  }
+
+  async switchAccount(targetLoginId, targetToken = null) {
+    // If a token is provided directly, authorize with it
+    if (targetToken) {
+      return this.authorize(targetToken);
+    }
+
+    // Check if account is in accountList with a token
+    const matched = this.accountList.find(a => a.loginid === targetLoginId);
+    if (matched && matched.token) {
+      return this.authorize(matched.token);
+    }
+
+    // In Deriv WS, we can also try reconnecting or calling authorize
+    this.loginid = targetLoginId;
+    if (matched) {
+      this.currency = matched.currency;
+      this.isDemo = matched.isVirtual;
+    }
+    return matched;
   }
 
   async subscribeBalance() {

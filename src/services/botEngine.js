@@ -1,5 +1,6 @@
 import { derivApi } from './derivWs.js';
 import { STRATEGY_PRESETS } from '../constants/strategies.js';
+import { getSymbolDisplayName } from '../constants/symbols.js';
 import { sound } from './sound.js';
 
 export class NeptuneBotEngine {
@@ -190,7 +191,8 @@ export class NeptuneBotEngine {
       }
 
       // Execute Trade
-      this.log(`PURCHASING ON ${symbol} | Contract: ${strat.contractType} | Target: ${targetDigit} | Stake: $${this.currentStake.toFixed(2)}`, 'purchasing');
+      const symbolName = getSymbolDisplayName(symbol, derivApi.availableSymbols);
+      this.log(`PURCHASING ON ${symbol} (${symbolName}) | Contract: ${strat.contractType} | Target: ${targetDigit} | Stake: $${this.currentStake.toFixed(2)}`, 'purchasing');
       
       let result;
       if (this.config.simulationMode) {

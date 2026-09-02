@@ -23,8 +23,13 @@ export function App() {
     isAuthorized: false,
     balance: 0,
     currency: 'USD',
-    isDemo: true
+    isDemo: true,
+    loginid: '',
+    accountList: []
   });
+
+  // Dynamic Deriv Symbols
+  const [availableSymbols, setAvailableSymbols] = useState([]);
 
   // Bot Engine State
   const [botState, setBotState] = useState(botEngine.getState());
@@ -91,9 +96,11 @@ export function App() {
             isAuthorized: derivApi.authorized,
             balance: derivApi.balance,
             currency: derivApi.currency,
-            isDemo: derivApi.isDemo
+            isDemo: derivApi.isDemo,
+            loginid: derivApi.loginid,
+            accountList: derivApi.accountList
           });
-          botEngine.log(`Connected & Authorized (${derivApi.isDemo ? 'Demo Account' : 'Real Account'})`, 'won');
+          botEngine.log(`Connected & Authorized (${derivApi.isDemo ? 'Demo Account' : 'Real Account'}) - Login ID: ${derivApi.loginid}`, 'won');
         })
         .catch((err) => {
           console.error('PKCE exchange error:', err);
@@ -191,16 +198,18 @@ export function App() {
         isAuthorized: derivApi.authorized,
         balance: derivApi.balance,
         currency: derivApi.currency,
-        isDemo: derivApi.isDemo
+        isDemo: derivApi.isDemo,
+        loginid: derivApi.loginid,
+        accountList: derivApi.accountList
       });
-      botEngine.log(`Connected to Deriv API (${derivApi.isDemo ? 'Demo Account' : 'Real Account'})`, 'info');
+      botEngine.log(`Connected to Deriv API (${derivApi.isDemo ? 'Demo Account' : 'Real Account'}) - Login ID: ${derivApi.loginid}`, 'info');
     } catch (e) {
       setWsState(prev => ({ ...prev, isConnecting: false, isAuthorized: false }));
       botEngine.log(`Deriv Connection Failed: ${e.message}`, 'alert');
     }
   };
 
-  // Deriv WS Balance & Auth Listeners
+  // Deriv WS Balance, Symbols & Auth Listeners
   useEffect(() => {
     const onAuth = (authData) => {
       setWsState(prev => ({
@@ -208,7 +217,9 @@ export function App() {
         isAuthorized: true,
         balance: authData.balance,
         currency: authData.currency,
-        isDemo: authData.isVirtual
+        isDemo: authData.isVirtual,
+        loginid: authData.loginid,
+        accountList: authData.accountList || prev.accountList
       }));
     };
 
@@ -220,14 +231,64 @@ export function App() {
       }));
     };
 
+    const onSyms = (symbols) => {
+      if (symbols && symbols.length > 0) {
+        setAvailableSymbols(symbols);
+        botEngine.log(`Loaded ${symbols.length} live markets from Deriv API`, 'info');
+      }
+    };
+
     derivApi.on('onAuthorize', onAuth);
     derivApi.on('onBalance', onBal);
+    derivApi.on('onSymbols', onSyms);
 
     return () => {
       derivApi.off('onAuthorize', onAuth);
       derivApi.off('onBalance', onBal);
+      derivApi.off('onSymbols', onSyms);
     };
   }, []);
+
+  // Switch between Real & Demo accounts
+  const handleSelectAccount = async (targetAccount) => {
+    if (!targetAccount || targetAccount.loginid === wsState.loginid) return;
+
+    botEngine.log(`Switching account to ${targetAccount.isVirtual ? 'Demo' : 'Real'} (${targetAccount.loginid})...`, 'info');
+    setWsState(prev => ({ ...prev, isConnecting: true }));
+
+    try {
+      if (targetAccount.token) {
+        // If account has dedicated token, authorize directly
+        await derivApi.authorize(targetAccount.token);
+        const updated = {
+          ...config,
+          apiToken: targetAccount.token,
+          currency: targetAccount.currency || 'USD'
+        };
+        setConfig(updated);
+        saveStoredConfig(updated);
+      } else {
+        // Switch account locally on websocket instance
+        await derivApi.switchAccount(targetAccount.loginid);
+      }
+
+      setWsState(prev => ({
+        ...prev,
+        isConnecting: false,
+        isAuthorized: true,
+        loginid: targetAccount.loginid,
+        isDemo: targetAccount.isVirtual,
+        currency: targetAccount.currency || prev.currency,
+        balance: derivApi.balance
+      }));
+
+      botEngine.log(`Switched successfully to ${targetAccount.isVirtual ? 'Demo' : 'Real'} Account: ${targetAccount.loginid}`, 'won');
+    } catch (err) {
+      console.error('Account switch failed:', err);
+      botEngine.log(`Failed to switch account: ${err.message}`, 'alert');
+      setWsState(prev => ({ ...prev, isConnecting: false }));
+    }
+  };
 
   // Start Bot Handler
   const handleStartBot = () => {
@@ -265,6 +326,9 @@ export function App() {
         currency={config.currency || wsState.currency}
         simulationMode={config.simulationMode}
         soundEffects={config.soundEffects}
+        accountList={wsState.accountList}
+        currentLoginId={wsState.loginid}
+        onSelectAccount={handleSelectAccount}
         onToggleSound={() => handleConfigChange({ ...config, soundEffects: !config.soundEffects })}
         onOpenRiskModal={() => setShowRiskModal(true)}
         onDerivLogin={handleDerivOAuthLogin}
@@ -279,6 +343,7 @@ export function App() {
           onOAuthLogin={handleDerivOAuthLogin}
           onOAuthSignUp={handleDerivOAuthSignUp}
           onConnectDeriv={handleConnectDeriv}
+          availableSymbols={availableSymbols}
           isConnecting={wsState.isConnecting}
           isConnected={wsState.connected}
           isAuthorized={wsState.isAuthorized}
