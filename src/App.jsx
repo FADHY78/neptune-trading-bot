@@ -56,7 +56,7 @@ export function App() {
       saveStoredConfig(updatedConfig);
 
       setWsState(prev => ({ ...prev, isConnecting: true }));
-      derivApi.connect(token, config.appId || '1089').then(() => {
+      derivApi.connect(token, config.appId || '34hP1yTdG6Hc7grRIWQWH').then(() => {
         botEngine.log(`Deriv OAuth Login successful! Account: ${primary.account}`, 'won');
       }).catch((e) => {
         botEngine.log(`Deriv OAuth Authorization Error: ${e.message}`, 'alert');
@@ -66,7 +66,7 @@ export function App() {
   }, []);
 
   const handleDerivOAuthLogin = () => {
-    const url = getDerivOAuthUrl(config.appId || '1089');
+    const url = getDerivOAuthUrl(config.appId || '34hP1yTdG6Hc7grRIWQWH');
     window.location.href = url;
   };
 

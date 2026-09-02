@@ -279,14 +279,14 @@ export const derivApi = new DerivService();
 /**
  * Generate Deriv OAuth 2.0 Login URL (Supports both Direct App ID and PKCE)
  */
-export const getDerivOAuthUrl = (appId = '1089') => {
+export const getDerivOAuthUrl = (appId = '34hP1yTdG6Hc7grRIWQWH') => {
   return `https://oauth.deriv.com/oauth2/authorize?app_id=${appId}&l=en`;
 };
 
 /**
  * Generate Deriv OAuth 2.0 PKCE Code Challenge URL (As documented in Deriv API OAuth 2.0 docs)
  */
-export const generatePKCEOAuthUrl = async (appId = '1089', redirectUri = window.location.origin) => {
+export const generatePKCEOAuthUrl = async (appId = '34hP1yTdG6Hc7grRIWQWH', redirectUri = window.location.origin) => {
   try {
     const array = crypto.getRandomValues(new Uint8Array(64));
     const codeVerifier = Array.from(array)
