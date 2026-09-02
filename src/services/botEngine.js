@@ -283,7 +283,7 @@ export class NeptuneBotEngine {
       won,
       profit,
       exitDigit,
-      exitTick: `1089.${Math.floor(100 + Math.random()*800)}${exitDigit}`,
+      exitTick: `1245.${Math.floor(100 + Math.random()*800)}${exitDigit}`,
       contractId: Math.floor(100000000 + Math.random()*900000000)
     };
   }

@@ -6,7 +6,7 @@
 export class DerivService {
   constructor() {
     this.ws = null;
-    this.appId = '1089';
+    this.appId = '34hP1yTdG6Hc7grRIWQWH';
     this.token = '';
     this.connected = false;
     this.authorized = false;
@@ -60,9 +60,9 @@ export class DerivService {
       }
 
       const isNumeric = /^\d+$/.test(String(this.appId).trim());
-      const wsAppId = isNumeric ? String(this.appId).trim() : '1089';
+      const wsAppId = isNumeric ? String(this.appId).trim() : (this.appId || '34hP1yTdG6Hc7grRIWQWH');
 
-      const url = `wss://ws.binaryws.com/websockets/v3?app_id=${wsAppId}`;
+      const url = `wss://ws.derivws.com/websockets/v3?app_id=${wsAppId}`;
       this.ws = new WebSocket(url);
 
       this.ws.onopen = () => {
@@ -280,31 +280,106 @@ export class DerivService {
 export const derivApi = new DerivService();
 
 /**
- * Generate Deriv OAuth 2.0 Login URL for Deriv WebSocket API
+ * Step 1: Generate PKCE Parameters (code_verifier, code_challenge, state)
  */
-export const getDerivOAuthUrl = (appId = '1089') => {
-  const cleanAppId = /^\d+$/.test(String(appId).trim()) ? String(appId).trim() : '1089';
-  return `https://oauth.deriv.com/oauth2/authorize?app_id=${cleanAppId}&l=en`;
+export const generatePKCE = async () => {
+  // 1. Generate a random code_verifier (64 bytes -> random unguessable string)
+  const array = crypto.getRandomValues(new Uint8Array(64));
+  const codeVerifier = Array.from(array)
+    .map(v => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'[v % 66])
+    .join('');
+
+  // 2. Derive the code_challenge = BASE64URL(SHA256(code_verifier))
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
+  const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  // 3. Generate a random state for CSRF protection
+  const state = crypto.getRandomValues(new Uint8Array(16))
+    .reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
+
+  // 4. Store code_verifier and state in sessionStorage before redirecting
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.setItem('pkce_code_verifier', codeVerifier);
+    sessionStorage.setItem('oauth_state', state);
+  }
+
+  return { codeVerifier, codeChallenge, state };
 };
 
 /**
- * Parse OAuth redirect tokens or code from URL query string
+ * Step 2: Build Deriv OAuth 2.0 Authorization Endpoint URL (Login or Sign Up with PKCE)
+ * Endpoint: https://auth.deriv.com/oauth2/auth
+ */
+export const getDerivOAuth2Url = async ({
+  clientId = '34hP1yTdG6Hc7grRIWQWH',
+  redirectUri = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '',
+  scope = 'trade account_manage',
+  isSignUp = false,
+  tracking = {}
+} = {}) => {
+  const { codeChallenge, state } = await generatePKCE();
+
+  const cleanClientId = String(clientId || '34hP1yTdG6Hc7grRIWQWH').trim();
+  const cleanRedirectUri = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '');
+
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: cleanClientId,
+    redirect_uri: cleanRedirectUri,
+    scope: scope,
+    state: state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256'
+  });
+
+  if (isSignUp) {
+    params.set('prompt', 'registration');
+    const trackToken = tracking.t || tracking.affiliate_token || tracking.sidi || tracking.ca;
+    if (trackToken) params.set('t', trackToken);
+    if (tracking.utm_campaign) params.set('utm_campaign', tracking.utm_campaign);
+    if (tracking.utm_medium) params.set('utm_medium', tracking.utm_medium);
+    if (tracking.utm_source) params.set('utm_source', tracking.utm_source);
+  }
+
+  return `https://auth.deriv.com/oauth2/auth?${params.toString()}`;
+};
+
+// Backwards compatibility alias
+export const getDerivOAuthUrl = getDerivOAuth2Url;
+
+/**
+ * Step 3: Handle OAuth Callback URL Parameters
  */
 export const parseDerivOAuthParams = (queryString = typeof window !== 'undefined' ? window.location.search : '') => {
+  if (!queryString) return { accounts: [], isCodeFlow: false };
   const searchParams = new URLSearchParams(queryString);
 
-  // PKCE Code Flow Response
+  // Check for error in callback
+  if (searchParams.has('error')) {
+    return {
+      error: searchParams.get('error'),
+      errorDescription: searchParams.get('error_description') || searchParams.get('error'),
+      accounts: [],
+      isCodeFlow: false
+    };
+  }
+
+  // PKCE Authorization Code flow callback: ?code=...&state=...
   if (searchParams.has('code')) {
     const code = searchParams.get('code');
     const state = searchParams.get('state');
-    const storedState = sessionStorage.getItem('oauth_state');
+    const storedState = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('oauth_state') : null;
 
-    return [{
+    return {
+      isCodeFlow: true,
       code,
       state,
-      isCodeFlow: true,
-      validState: !storedState || state === storedState
-    }];
+      validState: !storedState || state === storedState,
+      accounts: []
+    };
   }
 
   // Direct Token Query Params (?acct1=...&token1=...)
@@ -319,19 +394,23 @@ export const parseDerivOAuthParams = (queryString = typeof window !== 'undefined
     index++;
   }
 
-  return accounts;
+  return { accounts, isCodeFlow: false };
 };
 
 /**
- * Step 4: Exchange Authorization Code for Access Token via Backend / Serverless Endpoint
+ * Step 4: Exchange Authorization Code for Access Token via /api/token backend endpoint
  */
 export const exchangeCodeForToken = async ({ code, codeVerifier, clientId, redirectUri }) => {
+  const verifier = codeVerifier || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('pkce_code_verifier') : '');
+  const activeClientId = clientId || '34hP1yTdG6Hc7grRIWQWH';
+  const callbackUri = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '');
+
   try {
     const payload = {
       code,
-      code_verifier: codeVerifier || sessionStorage.getItem('pkce_code_verifier'),
-      client_id: clientId || '34hP1yTdG6Hc7grRIWQWH',
-      redirect_uri: redirectUri || (typeof window !== 'undefined' ? window.location.origin + '/' : 'https://neptune-trading-bot.vercel.app/')
+      code_verifier: verifier,
+      client_id: activeClientId,
+      redirect_uri: callbackUri
     };
 
     const res = await fetch('/api/token', {
@@ -343,10 +422,12 @@ export const exchangeCodeForToken = async ({ code, codeVerifier, clientId, redir
     });
 
     const data = await res.json();
-    
+
     // Clear PKCE storage after exchange
-    sessionStorage.removeItem('pkce_code_verifier');
-    sessionStorage.removeItem('oauth_state');
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('pkce_code_verifier');
+      sessionStorage.removeItem('oauth_state');
+    }
 
     if (!res.ok) {
       throw new Error(data.error_description || data.error || 'Token exchange failed');
@@ -354,8 +435,10 @@ export const exchangeCodeForToken = async ({ code, codeVerifier, clientId, redir
 
     return data; // { access_token, expires_in, token_type }
   } catch (err) {
-    sessionStorage.removeItem('pkce_code_verifier');
-    sessionStorage.removeItem('oauth_state');
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('pkce_code_verifier');
+      sessionStorage.removeItem('oauth_state');
+    }
     throw err;
   }
 };

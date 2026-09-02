@@ -19,10 +19,10 @@ export const AboutTab = () => {
           <div style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '6px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: '600', color: 'var(--accent-cyan)', marginBottom: '6px' }}>
               <Server size={14} />
-              <span>Deriv WebSocket Endpoint</span>
+              <span>Deriv OAuth 2.0 & WebSocket</span>
             </div>
             <code className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              wss://ws.binaryws.com/websockets/v3?app_id=1089
+              OAuth: auth.deriv.com/oauth2/auth (PKCE) | WS: wss://ws.derivws.com/websockets/v3
             </code>
           </div>
 

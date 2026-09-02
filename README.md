@@ -4,7 +4,7 @@ Neptune is an automated Deriv.com digit trading bot built with React, Vite, and 
 
 ## 🎯 Features
 
-- **Live Deriv WebSocket Integration**: Connect directly to `wss://ws.binaryws.com/websockets/v3?app_id=1089` using real API tokens or demo accounts.
+- **Deriv OAuth 2.0 & WebSocket Integration**: Modern OAuth 2.0 PKCE authentication (`auth.deriv.com`) and real-time streaming via `wss://ws.derivws.com/websockets/v3`.
 - **Built-in Simulator Mode**: Test strategies, Martingale logic, and risk controls instantly without requiring an API token.
 - **6 Built-in Strategy Presets**:
   - Differs 15 Combo Ultimate (Payout 9%)

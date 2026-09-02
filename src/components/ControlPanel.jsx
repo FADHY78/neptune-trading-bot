@@ -9,6 +9,8 @@ import { STRATEGY_PRESETS } from '../constants/strategies.js';
 export const ControlPanel = ({
   config,
   onChangeConfig,
+  onOAuthLogin,
+  onOAuthSignUp,
   onConnectDeriv,
   isConnecting,
   isConnected,
@@ -97,16 +99,29 @@ export const ControlPanel = ({
 
         {!config.simulationMode && (
           <>
-            <button
-              className="btn btn-primary"
-              style={{ width: '100%', marginBottom: '12px', gap: '6px' }}
-              onClick={onConnectDeriv}
-            >
-              <span>🔑 Log in via Deriv OAuth</span>
-            </button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+              <button
+                className="btn btn-primary"
+                style={{ gap: '6px', fontSize: '11px', padding: '8px 10px', justifyContent: 'center' }}
+                onClick={onOAuthLogin}
+                disabled={isConnecting}
+                title="Log in using Deriv OAuth 2.0 PKCE flow"
+              >
+                <span>🔑 Log in (PKCE)</span>
+              </button>
+              <button
+                className="btn btn-secondary"
+                style={{ gap: '6px', fontSize: '11px', padding: '8px 10px', justifyContent: 'center' }}
+                onClick={onOAuthSignUp}
+                disabled={isConnecting}
+                title="Create a new Deriv account with PKCE registration flow"
+              >
+                <span>✨ Sign Up</span>
+              </button>
+            </div>
 
             <div style={{ textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-              — OR ENTER API TOKEN MANUALLY —
+              — OR CONNECT WITH API TOKEN —
             </div>
 
             <div className="input-group">
@@ -130,11 +145,14 @@ export const ControlPanel = ({
             </div>
 
             <div className="input-group">
-              <label className="input-label">App ID</label>
+              <label className="input-label">
+                <span>Client ID / App ID</span>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Default: 34hP1yTdG6Hc7grRIWQWH</span>
+              </label>
               <input
                 type="text"
                 className="input-field font-mono"
-                placeholder="1089"
+                placeholder="34hP1yTdG6Hc7grRIWQWH"
                 value={config.appId}
                 onChange={(e) => handleInputChange('appId', e.target.value)}
               />

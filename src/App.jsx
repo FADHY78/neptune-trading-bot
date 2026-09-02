@@ -8,7 +8,7 @@ import { StrategyDocs } from './components/StrategyDocs.jsx';
 import { AboutTab } from './components/AboutTab.jsx';
 import { RiskModal } from './components/RiskModal.jsx';
 import { loadStoredConfig, saveStoredConfig, isDisclaimerAccepted, setDisclaimerAccepted } from './services/storage.js';
-import { derivApi, getDerivOAuthUrl, parseDerivOAuthParams, exchangeCodeForToken } from './services/derivWs.js';
+import { derivApi, getDerivOAuth2Url, parseDerivOAuthParams, exchangeCodeForToken } from './services/derivWs.js';
 import { botEngine } from './services/botEngine.js';
 
 export function App() {
@@ -35,17 +35,81 @@ export function App() {
     saveStoredConfig(newConfig);
   };
 
-  // Deriv OAuth Redirect Token Handler
+  // Deriv OAuth 2.0 Redirect & PKCE Token Handler
   useEffect(() => {
-    const accounts = parseDerivOAuthParams();
-    if (accounts.length > 0) {
-      const primary = accounts[0];
+    const oauthParams = parseDerivOAuthParams();
 
+    // Check for callback error
+    if (oauthParams.error) {
+      botEngine.log(`OAuth Error: ${oauthParams.errorDescription || oauthParams.error}`, 'alert');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return;
+    }
+
+    // Modern Deriv OAuth 2.0 PKCE Code Exchange
+    if (oauthParams.isCodeFlow && oauthParams.code) {
+      if (!oauthParams.validState) {
+        botEngine.log('OAuth Security Warning: State mismatch (potential CSRF). Exchange aborted.', 'alert');
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return;
+      }
+
+      const activeClientId = config.appId || '34hP1yTdG6Hc7grRIWQWH';
+      const redirectUri = `${window.location.origin}${window.location.pathname}`;
+
+      // Clean up URL immediately
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setWsState(prev => ({ ...prev, isConnecting: true }));
+      botEngine.log('Exchanging authorization code for Deriv access token (PKCE)...', 'info');
+
+      exchangeCodeForToken({
+        code: oauthParams.code,
+        clientId: activeClientId,
+        redirectUri
+      })
+        .then(async (tokenData) => {
+          const accessToken = tokenData.access_token;
+          if (!accessToken) {
+            throw new Error('No access_token returned by Deriv token endpoint');
+          }
+
+          const updatedConfig = {
+            ...config,
+            apiToken: accessToken,
+            simulationMode: false
+          };
+          setConfig(updatedConfig);
+          saveStoredConfig(updatedConfig);
+
+          botEngine.log('Deriv OAuth 2.0 PKCE login successful!', 'won');
+
+          // Connect to Deriv WebSocket with access token
+          await derivApi.connect(accessToken, activeClientId);
+          setWsState({
+            connected: true,
+            isConnecting: false,
+            isAuthorized: derivApi.authorized,
+            balance: derivApi.balance,
+            currency: derivApi.currency,
+            isDemo: derivApi.isDemo
+          });
+          botEngine.log(`Connected & Authorized (${derivApi.isDemo ? 'Demo Account' : 'Real Account'})`, 'won');
+        })
+        .catch((err) => {
+          console.error('PKCE exchange error:', err);
+          botEngine.log(`Deriv OAuth PKCE failed: ${err.message}`, 'alert');
+          setWsState(prev => ({ ...prev, isConnecting: false }));
+        });
+      return;
+    }
+
+    // Direct token callback fallback (?acct1=...&token1=...)
+    if (oauthParams.accounts && oauthParams.accounts.length > 0) {
+      const primary = oauthParams.accounts[0];
       if (primary.token) {
         const token = primary.token;
         const currency = primary.currency || 'USD';
 
-        // Clean up URL parameters cleanly
         window.history.replaceState({}, document.title, window.location.pathname);
 
         const updatedConfig = {
@@ -58,25 +122,50 @@ export function App() {
         saveStoredConfig(updatedConfig);
 
         setWsState(prev => ({ ...prev, isConnecting: true }));
-        derivApi.connect(token, '1089').then(() => {
-          botEngine.log(`Deriv OAuth Login successful! Account: ${primary.account}`, 'won');
+        derivApi.connect(token, config.appId || '34hP1yTdG6Hc7grRIWQWH').then(() => {
+          botEngine.log(`Deriv Login successful! Account: ${primary.account}`, 'won');
         }).catch((e) => {
-          botEngine.log(`Deriv OAuth Authorization Error: ${e.message}`, 'alert');
+          botEngine.log(`Deriv Authorization Error: ${e.message}`, 'alert');
           setWsState(prev => ({ ...prev, isConnecting: false }));
         });
       }
     }
   }, []);
 
-  const handleDerivOAuthLogin = () => {
-    const url = getDerivOAuthUrl('1089');
-    window.location.href = url;
+  const handleDerivOAuthLogin = async () => {
+    try {
+      const redirectUri = `${window.location.origin}${window.location.pathname}`;
+      const url = await getDerivOAuth2Url({
+        clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH',
+        redirectUri,
+        scope: 'trade account_manage'
+      });
+      window.location.href = url;
+    } catch (e) {
+      botEngine.log(`Failed to initiate Deriv OAuth: ${e.message}`, 'alert');
+    }
+  };
+
+  const handleDerivOAuthSignUp = async () => {
+    try {
+      const redirectUri = `${window.location.origin}${window.location.pathname}`;
+      const url = await getDerivOAuth2Url({
+        clientId: config.appId || '34hP1yTdG6Hc7grRIWQWH',
+        redirectUri,
+        scope: 'trade account_manage',
+        isSignUp: true
+      });
+      window.location.href = url;
+    } catch (e) {
+      botEngine.log(`Failed to initiate Deriv Sign Up: ${e.message}`, 'alert');
+    }
   };
 
   // Auto-connect on startup if token is present
   useEffect(() => {
-    const accounts = parseDerivOAuthParams();
-    if (accounts.length === 0 && config.apiToken && !config.simulationMode) {
+    const oauthParams = parseDerivOAuthParams();
+    const hasOAuthParams = oauthParams.isCodeFlow || (oauthParams.accounts && oauthParams.accounts.length > 0);
+    if (!hasOAuthParams && config.apiToken && !config.simulationMode) {
       handleConnectDeriv();
     }
   }, []);
@@ -95,7 +184,7 @@ export function App() {
     setWsState(prev => ({ ...prev, isConnecting: true }));
 
     try {
-      await derivApi.connect(config.apiToken, config.appId || '1089');
+      await derivApi.connect(config.apiToken, config.appId || '34hP1yTdG6Hc7grRIWQWH');
       setWsState({
         connected: true,
         isConnecting: false,
@@ -187,7 +276,9 @@ export function App() {
         <ControlPanel
           config={config}
           onChangeConfig={handleConfigChange}
-          onConnectDeriv={handleDerivOAuthLogin}
+          onOAuthLogin={handleDerivOAuthLogin}
+          onOAuthSignUp={handleDerivOAuthSignUp}
+          onConnectDeriv={handleConnectDeriv}
           isConnecting={wsState.isConnecting}
           isConnected={wsState.connected}
           isAuthorized={wsState.isAuthorized}
