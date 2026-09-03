@@ -966,14 +966,16 @@ export async function handleTradeBuy(req, res) {
           }));
         } else if (data.msg_type === 'proposal_open_contract' && data.proposal_open_contract) {
           const poc = data.proposal_open_contract;
-          if (poc.contract_id === contractBuyId && (poc.is_expired || poc.is_sold)) {
-            clearTimeout(timer);
-            ws.close();
+          const isCompleted = poc.status === 'won' || poc.status === 'lost' || (poc.is_settleable === 1 && poc.status !== 'open') || (Boolean(poc.is_expired) && poc.status !== 'open');
 
-            const won = poc.status === 'won';
-            const profit = poc.profit;
-            const exitTick = poc.exit_tick_display_value;
-            const exitDigit = exitTick ? parseInt(exitTick.slice(-1), 10) : null;
+          if (poc.contract_id === contractBuyId && isCompleted) {
+            clearTimeout(timer);
+            try { ws.close(); } catch(e) {}
+
+            const won = poc.status === 'won' || Number(poc.profit) > 0;
+            const profit = Number(poc.profit) || 0;
+            const exitTick = poc.exit_tick_display_value || (poc.exit_tick !== undefined ? String(poc.exit_tick) : (poc.current_spot_display_value || (poc.current_spot !== undefined ? String(poc.current_spot) : '')));
+            const exitDigit = exitTick ? parseInt(String(exitTick).slice(-1), 10) : (poc.barrier !== undefined ? parseInt(String(poc.barrier), 10) : null);
 
             resolve({
               contractId: poc.contract_id,
