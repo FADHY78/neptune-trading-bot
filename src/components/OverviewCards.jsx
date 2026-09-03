@@ -1,11 +1,28 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, Target, Zap, Shield, Award } from 'lucide-react';
 
-export const OverviewCards = ({ state }) => {
-  const { sessionPnL, tradeCount, wins, losses, consecutiveLosses, currentStreak, currentStake, lastExitDigit } = state;
+export const OverviewCards = ({ state = {} }) => {
+  const {
+    sessionPnL = 0,
+    tradeCount = 0,
+    wins = 0,
+    losses = 0,
+    consecutiveLosses = 0,
+    currentStreak = { type: 'NONE', count: 0 },
+    currentStake = 5,
+    lastExitDigit = null
+  } = state || {};
 
-  const winRate = tradeCount > 0 ? ((wins / tradeCount) * 100).toFixed(1) : '0.0';
-  const isPositive = sessionPnL >= 0;
+  const numPnL = Number(sessionPnL) || 0;
+  const numStake = Number(currentStake) || 5;
+  const numTradeCount = Number(tradeCount) || 0;
+  const numWins = Number(wins) || 0;
+  const numLosses = Number(losses) || 0;
+  const numConsecLosses = Number(consecutiveLosses) || 0;
+  const streak = currentStreak || { type: 'NONE', count: 0 };
+
+  const winRate = numTradeCount > 0 ? ((numWins / numTradeCount) * 100).toFixed(1) : '0.0';
+  const isPositive = numPnL >= 0;
 
   return (
     <div style={{
@@ -35,9 +52,9 @@ export const OverviewCards = ({ state }) => {
           alignItems: 'baseline',
           gap: '8px'
         }}>
-          {isPositive ? `+$${sessionPnL.toFixed(2)}` : `-$${Math.abs(sessionPnL).toFixed(2)}`}
+          {isPositive ? `+$${numPnL.toFixed(2)}` : `-$${Math.abs(numPnL).toFixed(2)}`}
           <span style={{ fontSize: '12px', fontWeight: '500', color: 'var(--text-muted)' }}>
-            ▲ {wins} wins / {losses} losses
+            ▲ {numWins} wins / {numLosses} losses
           </span>
         </div>
       </div>
@@ -54,7 +71,7 @@ export const OverviewCards = ({ state }) => {
           {winRate}%
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          Total Trades: <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{tradeCount}</span>
+          Total Trades: <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{numTradeCount}</span>
         </div>
       </div>
 
@@ -67,10 +84,10 @@ export const OverviewCards = ({ state }) => {
           <Zap size={18} color="var(--color-warning)" />
         </div>
         <div className="font-mono" style={{ fontSize: '24px', fontWeight: '700', color: 'var(--text-primary)' }}>
-          {currentStreak.type === 'WIN' ? `W${currentStreak.count}` : currentStreak.type === 'LOSS' ? `L${currentStreak.count}` : 'NONE'}
+          {streak.type === 'WIN' ? `W${streak.count}` : streak.type === 'LOSS' ? `L${streak.count}` : 'NONE'}
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          Consecutive Loss: <span className="font-mono" style={{ color: consecutiveLosses > 0 ? 'var(--color-danger)' : 'var(--text-primary)' }}>{consecutiveLosses}</span>
+          Consecutive Loss: <span className="font-mono" style={{ color: numConsecLosses > 0 ? 'var(--color-danger)' : 'var(--text-primary)' }}>{numConsecLosses}</span>
         </div>
       </div>
 
@@ -83,10 +100,10 @@ export const OverviewCards = ({ state }) => {
           <Target size={18} color="var(--accent-cyan)" />
         </div>
         <div className="font-mono" style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-cyan)' }}>
-          ${currentStake.toFixed(2)}
+          ${numStake.toFixed(2)}
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          Last Exit Digit: <span className="font-mono" style={{ color: 'var(--color-warning)', fontWeight: '700' }}>{lastExitDigit !== null ? lastExitDigit : '-'}</span>
+          Last Exit Digit: <span className="font-mono" style={{ color: 'var(--color-warning)', fontWeight: '700' }}>{lastExitDigit !== null && lastExitDigit !== undefined ? lastExitDigit : '-'}</span>
         </div>
       </div>
     </div>

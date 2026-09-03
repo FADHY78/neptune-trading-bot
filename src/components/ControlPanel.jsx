@@ -655,21 +655,30 @@ export const ControlPanel = ({
             </div>
 
             {/* Martingale Progression Preview */}
-            <div style={{
-              backgroundColor: 'var(--bg-input)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              padding: '8px',
-              fontSize: '11px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
-              <span style={{ color: 'var(--text-muted)' }}>Progression:</span>
-              <span className="font-mono" style={{ color: 'var(--color-warning)', fontWeight: '600' }}>
-                ${step1} → ${step2.toFixed(1)} → ${step3.toFixed(1)}
-              </span>
-            </div>
+            {(() => {
+              const s1 = Number(config.initialStake) || 5;
+              const f = Number(config.martingaleFactor) || 12;
+              const maxL = Number(config.maxStake) || 260;
+              const s2 = Math.min(s1 * f, maxL);
+              const s3 = Math.min(s2 * f, maxL);
+              return (
+                <div style={{
+                  backgroundColor: 'var(--bg-input)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '4px',
+                  padding: '8px',
+                  fontSize: '11px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Progression:</span>
+                  <span className="font-mono" style={{ color: 'var(--color-warning)', fontWeight: '600' }}>
+                    ${s1.toFixed(2)} → ${s2.toFixed(2)} → ${s3.toFixed(2)}
+                  </span>
+                </div>
+              );
+            })()}
           </>
         )}
       </div>

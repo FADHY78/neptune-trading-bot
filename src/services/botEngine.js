@@ -371,11 +371,20 @@ export class NeptuneBotEngine {
   }
 
   handleTradeResult(result, strat) {
-    this.tradeCount++;
-    this.lastExitDigit = result.exitDigit;
-    this.sessionPnL += result.profit;
+    if (!result || result.error) return;
+    const profit = Number(result.profit) || 0;
+    const exitDigit = result.exitDigit !== undefined && result.exitDigit !== null ? result.exitDigit : (result.exitTick ? parseInt(String(result.exitTick).slice(-1), 10) : '-');
+    const won = Boolean(result.won);
 
-    if (result.won) {
+    this.tradeCount++;
+    this.lastExitDigit = exitDigit;
+    this.sessionPnL += profit;
+
+    if (!this.currentStreak) {
+      this.currentStreak = { type: 'NONE', count: 0 };
+    }
+
+    if (won) {
       this.wins++;
       this.consecutiveLosses = 0;
       if (this.currentStreak.type === 'WIN') {
@@ -387,7 +396,7 @@ export class NeptuneBotEngine {
       if (this.config.soundEffects) sound.playWin();
 
       this.log(
-        `CONTRACT WON! | Profit: +$${result.profit.toFixed(2)} | Total P&L: $${this.sessionPnL.toFixed(2)} | Exit Digit: ${result.exitDigit}`,
+        `CONTRACT WON! | Profit: +$${profit.toFixed(2)} | Total P&L: $${this.sessionPnL.toFixed(2)} | Exit Digit: ${exitDigit}`,
         'won'
       );
 
@@ -396,7 +405,7 @@ export class NeptuneBotEngine {
     } else {
       this.losses++;
       this.consecutiveLosses++;
-      this.lastLosingDigit = result.exitDigit;
+      this.lastLosingDigit = exitDigit;
 
       if (this.currentStreak.type === 'LOSS') {
         this.currentStreak.count++;
@@ -413,13 +422,13 @@ export class NeptuneBotEngine {
         const nextStake = Math.min(this.currentStake * factor, maxStake);
         
         this.log(
-          `CONTRACT LOST | Loss: -$${Math.abs(result.profit).toFixed(2)} | Exit Digit: ${result.exitDigit} | Martingale: Next Stake $${nextStake.toFixed(2)}`,
+          `CONTRACT LOST | Loss: -$${Math.abs(profit).toFixed(2)} | Exit Digit: ${exitDigit} | Martingale: Next Stake $${nextStake.toFixed(2)}`,
           'lost'
         );
         this.currentStake = nextStake;
       } else {
         this.log(
-          `CONTRACT LOST | Loss: -$${Math.abs(result.profit).toFixed(2)} | Exit Digit: ${result.exitDigit}`,
+          `CONTRACT LOST | Loss: -$${Math.abs(profit).toFixed(2)} | Exit Digit: ${exitDigit}`,
           'lost'
         );
       }
