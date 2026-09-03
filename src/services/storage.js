@@ -15,8 +15,9 @@ export const DEFAULT_CONFIG = {
   tradingLogic: 'analyze', // 'analyze', 'random', 'specific'
   selectedDigits: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
   forceSymbolSwitch: true,
-  decisionInterval: 5,
-  postTradeCooldown: 5,
+  fastExecution: true, // Millisecond Turbo Execution
+  decisionInterval: 1,
+  postTradeCooldown: 1,
   avoidLastLosingDigit: false,
   avoidLastExitDigit: false,
   useMartingale: true,

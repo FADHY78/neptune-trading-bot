@@ -591,6 +591,16 @@ export const ControlPanel = ({
         <label className="checkbox-label" style={{ marginBottom: '6px' }}>
           <input
             type="checkbox"
+            checked={config.fastExecution !== false}
+            onChange={(e) => handleInputChange('fastExecution', e.target.checked)}
+            disabled={isRunning}
+          />
+          <span style={{ color: 'var(--accent-cyan)', fontWeight: '600' }}>⚡ Millisecond Turbo Execution (Sub-second tick sniping)</span>
+        </label>
+
+        <label className="checkbox-label" style={{ marginBottom: '6px' }}>
+          <input
+            type="checkbox"
             checked={config.avoidLastLosingDigit}
             onChange={(e) => handleInputChange('avoidLastLosingDigit', e.target.checked)}
             disabled={isRunning}

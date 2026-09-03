@@ -31,8 +31,9 @@ export class NeptuneBotEngine {
     // Terminal Logs
     this.logs = [];
     
-    // Listeners
+    // Listeners & Tick Event Subscriptions for Millisecond Sniping
     this.subscribers = new Set();
+    this.tickResolvers = [];
   }
 
   subscribe(listener) {
@@ -155,7 +156,41 @@ export class NeptuneBotEngine {
       if (richList.length > 100) richList.shift();
     }
 
+    // Immediate millisecond wakeup for event-driven trade execution
+    if (this.tickResolvers && this.tickResolvers.length > 0) {
+      const currentResolvers = [...this.tickResolvers];
+      this.tickResolvers = [];
+      currentResolvers.forEach(fn => {
+        try { fn({ digit, symbol, quote, timestamp: performance.now() }); } catch(e) {}
+      });
+    }
+
     this.notify();
+  }
+
+  /**
+   * Event-driven microsecond tick listener.
+   * Eliminates polling delay and allows trades to execute the exact millisecond a tick arrives.
+   */
+  waitForNextTick(timeoutMs = 1200) {
+    return new Promise(resolve => {
+      let settled = false;
+      const handler = (tickInfo) => {
+        if (!settled) {
+          settled = true;
+          this.tickResolvers = this.tickResolvers.filter(fn => fn !== handler);
+          resolve(tickInfo);
+        }
+      };
+      this.tickResolvers.push(handler);
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          this.tickResolvers = this.tickResolvers.filter(fn => fn !== handler);
+          resolve(null);
+        }
+      }, timeoutMs);
+    });
   }
 
   loadHistoricalDigits(digits, symbol = this.activeSymbol || '1HZ100V', prices = []) {
@@ -257,6 +292,9 @@ export class NeptuneBotEngine {
         break;
       }
 
+      // Fast analysis benchmark start
+      const analysisStart = performance.now();
+
       // Select symbol & digit
       let symbol = this.selectNextSymbol();
       const strat = STRATEGY_PRESETS.find(s => s.id === this.config.strategyId) || STRATEGY_PRESETS[0];
@@ -274,8 +312,9 @@ export class NeptuneBotEngine {
         const minConf = this.tradeCount < 10 ? 70 : 55;
         if ((!bestOpp.confirmed || bestOpp.confidence < minConf) && this.recentTickDigits.length >= 8) {
           const symName = getSymbolDisplayName(bestOpp.symbol, derivApi.availableSymbols);
-          this.log(`🎯 Quantum Scanner [${symName}]: ${bestOpp.summary || 'Analyzing ticks'} — Target: ${bestOpp.digit} (${bestOpp.confidence}% conf). Awaiting high-precision confluence...`, 'cooldown');
-          await this.sleep(1000);
+          this.log(`🎯 Quantum Scanner [${symName}]: ${bestOpp.summary || 'Analyzing ticks'} — Target: ${bestOpp.digit} (${bestOpp.confidence}% conf). Awaiting next tick confluence...`, 'cooldown');
+          // Event-driven: wake immediately on next incoming tick instead of blind 1s sleep
+          await this.waitForNextTick(600);
           continue;
         }
 
@@ -292,20 +331,21 @@ export class NeptuneBotEngine {
       // Filters
       if (this.config.avoidLastExitDigit && targetDigit === this.lastExitDigit) {
         this.log(`Filter: Skipping target digit ${targetDigit} (matches last exit digit).`, 'cooldown');
-        await this.sleep(1000);
+        await this.waitForNextTick(300);
         continue;
       }
 
       if (this.config.avoidLastLosingDigit && targetDigit === this.lastLosingDigit) {
         this.log(`Filter: Skipping target digit ${targetDigit} (matches last losing digit).`, 'cooldown');
-        await this.sleep(1000);
+        await this.waitForNextTick(300);
         continue;
       }
 
-      // Execute Trade
+      // Execute Trade with Millisecond Precision
+      const analysisMs = (performance.now() - analysisStart).toFixed(1);
       const symbolName = getSymbolDisplayName(symbol, derivApi.availableSymbols);
       const targetDisplay = Array.isArray(targetDigit) ? `[${targetDigit.join(', ')}]` : targetDigit;
-      this.log(`PURCHASING ON ${symbol} (${symbolName}) | Contract: ${strat.contractType} | Target: ${targetDisplay} | Stake: $${this.currentStake.toFixed(2)}${strat.bulkCount > 1 ? ` (Bulk ${strat.bulkCount}x Split)` : ''}`, 'purchasing');
+      this.log(`⚡ [Millisecond Execution] Analyzed in ${analysisMs}ms | Dispatching order on ${symbol} (${symbolName}) | Target: ${targetDisplay} | Stake: $${this.currentStake.toFixed(2)}${strat.bulkCount > 1 ? ` (Bulk ${strat.bulkCount}x Split)` : ''}`, 'purchasing');
       
       let result;
       if (this.config.simulationMode) {
@@ -318,8 +358,8 @@ export class NeptuneBotEngine {
 
       // If trade failed due to network/API error, pause and retry next cycle without taking false loss or applying Martingale
       if (result.error) {
-        this.log(`Trade skipped: ${result.message}. Pausing for 5s...`, 'cooldown');
-        await this.sleep(5000);
+        this.log(`Trade skipped: ${result.message}. Pausing for 3s...`, 'cooldown');
+        await this.sleep(3000);
         continue;
       }
 
@@ -331,8 +371,11 @@ export class NeptuneBotEngine {
         derivApi.checkServerSession().catch(() => {});
       }
 
-      // Cooldown
-      const cooldownSec = Number(this.config.postTradeCooldown) || 5;
+      // Cooldown (respects turbo execution 0s or configurable fast cooldown)
+      const isTurbo = this.config?.fastExecution !== false;
+      const cooldownSec = this.config?.postTradeCooldown !== undefined 
+        ? Number(this.config.postTradeCooldown) 
+        : (isTurbo ? 0.5 : 2);
       if (cooldownSec > 0 && this.running) {
         this.log(`Cooldown for ${cooldownSec}s...`, 'cooldown');
         await this.sleep(cooldownSec * 1000);
@@ -674,7 +717,9 @@ export class NeptuneBotEngine {
   }
 
   async simulateTrade(symbol, strat, targetDigit, stake) {
-    await this.sleep(1200);
+    const isTurbo = this.config?.fastExecution !== false;
+    const simLatency = isTurbo ? 60 : 250;
+    await this.sleep(simLatency);
 
     const targets = Array.isArray(targetDigit) ? targetDigit : [targetDigit];
     const isBulk = targets.length > 1;
@@ -788,9 +833,11 @@ export class NeptuneBotEngine {
           });
         });
 
+        const buyStart = performance.now();
         const buyResults = await Promise.all(buyPromises);
+        const buyMs = Math.round(performance.now() - buyStart);
         const contractIds = buyResults.map(r => r.contract_id || r.contractId);
-        this.log(`Bulk contracts confirmed! IDs: [${contractIds.join(', ')}]`, 'info');
+        this.log(`⚡ [Millisecond Execution] ${count} Bulk contracts confirmed in ${buyMs}ms! IDs: [${contractIds.join(', ')}]`, 'info');
 
         // Refresh live balance in background after contract purchase
         derivApi.checkServerSession().catch(() => {});
@@ -842,15 +889,17 @@ export class NeptuneBotEngine {
         barrier = strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4);
       }
 
+      const buyStart = performance.now();
       const buyRes = await derivApi.buyContract({
         symbol,
         contractType: strat.contractType,
         stake,
         barrier: barrier
       });
+      const buyMs = Math.round(performance.now() - buyStart);
 
       const contractId = buyRes.contract_id || buyRes.contractId;
-      this.log(`Contract purchase confirmed! ID: ${contractId}`, 'info');
+      this.log(`⚡ [Millisecond Execution] Contract registered at Deriv in ${buyMs}ms! ID: ${contractId} | Target Locked: ${barrier}`, 'info');
 
       // Refresh live balance in background after contract purchase
       derivApi.checkServerSession().catch(() => {});
