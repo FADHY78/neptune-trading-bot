@@ -886,19 +886,16 @@ export async function handleTradeBuy(req, res) {
     const isOAuth = session.isOAuth || (session.accessToken && (session.accessToken.startsWith('ory_at_') || session.accessToken.length > 32));
 
     if (isOAuth) {
-      // OAuth 2.0 PKCE flow: Try OTP for the selected account, fallback to standard WS with bearer token
-      try {
-        const otpData = await getDerivAccountOtp(session.activeLoginid, session.accessToken);
-        if (otpData && otpData.url) {
-          targetWsUrl = otpData.url;
-        }
-        if (otpData && otpData.otp) {
-          authReqPayload = { authorize: otpData.otp, req_id: 1 };
-        }
-      } catch (otpErr) {
-        console.warn('OTP acquisition note (falling back to direct auth):', otpErr.message);
-        // Fallback: try standard WS authorize with bearer token
-        authReqPayload = { authorize: session.accessToken, req_id: 1 };
+      // OAuth 2.0 PKCE flow: Acquire short-lived OTP for the selected account
+      const otpData = await getDerivAccountOtp(session.activeLoginid, session.accessToken);
+      if (otpData && otpData.url) {
+        targetWsUrl = otpData.url;
+        // Pre-authenticated URL via ?otp= query param
+        authReqPayload = null;
+      } else if (otpData && otpData.otp) {
+        authReqPayload = { authorize: otpData.otp, req_id: 1 };
+      } else {
+        throw new Error('Failed to acquire authenticated Options trading URL from Deriv.');
       }
     } else {
       // Direct API Token flow
@@ -1114,5 +1111,9 @@ export async function getDerivAccountOtp(accountId, accessToken) {
     throw new Error(`Deriv OTP acquisition error (${otpRes.status}): ${errText}`);
   }
 
-  return otpRes.json();
+  const otpJson = await otpRes.json();
+  const rawData = otpJson?.data || otpJson;
+  const url = rawData?.url || rawData?.websocket_url || rawData?.ws_url;
+  const otp = rawData?.otp || rawData?.token;
+  return { url, otp, raw: rawData };
 }
