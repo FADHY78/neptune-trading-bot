@@ -283,6 +283,154 @@ export const ControlPanel = ({
             ))}
           </select>
         </div>
+
+        {/* Over / Under Interactive Controls */}
+        {config.strategyId === 'over-under-barrier' && (
+          <div style={{
+            marginTop: '12px',
+            padding: '12px',
+            backgroundColor: 'var(--bg-input)',
+            borderRadius: '8px',
+            border: '1px solid rgba(0, 212, 255, 0.25)'
+          }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent-cyan)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              🎯 Over / Under Trade Direction & Barrier Setup
+            </div>
+
+            {/* Direction Toggle */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+              <button
+                type="button"
+                className={`btn ${config.overUnderDirection !== 'UNDER' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  padding: '8px 6px',
+                  backgroundColor: config.overUnderDirection !== 'UNDER' ? 'rgba(0, 230, 118, 0.18)' : 'transparent',
+                  borderColor: config.overUnderDirection !== 'UNDER' ? 'var(--color-success)' : 'var(--border-color)',
+                  color: config.overUnderDirection !== 'UNDER' ? 'var(--color-success)' : 'var(--text-secondary)'
+                }}
+                onClick={() => handleInputChange('overUnderDirection', 'OVER')}
+                disabled={isRunning}
+              >
+                ▲ OVER (Digit &gt; {config.barrier !== undefined ? config.barrier : 4})
+              </button>
+
+              <button
+                type="button"
+                className={`btn ${config.overUnderDirection === 'UNDER' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  padding: '8px 6px',
+                  backgroundColor: config.overUnderDirection === 'UNDER' ? 'rgba(255, 61, 90, 0.18)' : 'transparent',
+                  borderColor: config.overUnderDirection === 'UNDER' ? 'var(--color-danger)' : 'var(--border-color)',
+                  color: config.overUnderDirection === 'UNDER' ? 'var(--color-danger)' : 'var(--text-secondary)'
+                }}
+                onClick={() => handleInputChange('overUnderDirection', 'UNDER')}
+                disabled={isRunning}
+              >
+                ▼ UNDER (Digit &lt; {config.barrier !== undefined ? config.barrier : 4})
+              </button>
+            </div>
+
+            {/* Barrier Selection */}
+            <div className="input-group" style={{ marginBottom: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <label className="input-label" style={{ marginBottom: 0 }}>Selected Barrier Digit</label>
+                <span className="font-mono" style={{ fontSize: '11px', color: 'var(--accent-cyan)', fontWeight: '700' }}>
+                  Target Barrier: {config.barrier !== undefined ? config.barrier : 4}
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '4px' }}>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map(d => {
+                  const isSelected = (config.barrier !== undefined ? Number(config.barrier) : 4) === d;
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => handleInputChange('barrier', d)}
+                      disabled={isRunning}
+                      style={{
+                        padding: '6px 0',
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        borderRadius: '4px',
+                        border: isSelected ? '1px solid var(--accent-cyan)' : '1px solid var(--border-color)',
+                        backgroundColor: isSelected ? 'rgba(0, 212, 255, 0.2)' : 'transparent',
+                        color: isSelected ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                        cursor: isRunning ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Winning Digits Info */}
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+              {config.overUnderDirection === 'UNDER' ? (
+                <>Winning Digits: <strong style={{ color: 'var(--color-success)' }}>[{Array.from({ length: config.barrier !== undefined ? config.barrier : 4 }, (_, i) => i).join(', ')}]</strong></>
+              ) : (
+                <>Winning Digits: <strong style={{ color: 'var(--color-success)' }}>[{Array.from({ length: 9 - (config.barrier !== undefined ? config.barrier : 4) }, (_, i) => (config.barrier !== undefined ? config.barrier : 4) + 1 + i).join(', ')}]</strong></>
+              )}
+              <span style={{ display: 'block', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                ⚡ Bot scans live tick momentum and enters when {config.overUnderDirection || 'OVER'} probability is maximized.
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Even / Odd Interactive Controls */}
+        {config.strategyId === 'even-odd-wave' && (
+          <div style={{
+            marginTop: '12px',
+            padding: '12px',
+            backgroundColor: 'var(--bg-input)',
+            borderRadius: '8px',
+            border: '1px solid rgba(0, 212, 255, 0.25)'
+          }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent-cyan)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              ⚡ Parity Selection & Opportunity Scanner
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+              {[
+                { id: 'auto', label: 'Auto Scan', desc: 'Markov wave' },
+                { id: 'even', label: 'Even Only', desc: '0, 2, 4, 6, 8' },
+                { id: 'odd', label: 'Odd Only', desc: '1, 3, 5, 7, 9' }
+              ].map(opt => {
+                const isSelected = (config.evenOddMode || 'auto') === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => handleInputChange('evenOddMode', opt.id)}
+                    disabled={isRunning}
+                    style={{
+                      padding: '8px 4px',
+                      borderRadius: '6px',
+                      border: isSelected ? '1px solid var(--accent-cyan)' : '1px solid var(--border-color)',
+                      backgroundColor: isSelected ? 'rgba(0, 212, 255, 0.15)' : 'transparent',
+                      color: isSelected ? 'var(--accent-cyan)' : 'var(--text-secondary)',
+                      fontSize: '11px',
+                      fontWeight: '700',
+                      cursor: isRunning ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    <div>{opt.label}</div>
+                    <div style={{ fontSize: '9px', fontWeight: '400', opacity: 0.8 }}>{opt.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+              ⚡ Bot scans tick persistence runs and Markov transition probability to execute optimal parity entries.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* C. General Settings */}

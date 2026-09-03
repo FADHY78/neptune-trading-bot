@@ -18,6 +18,9 @@ export const DEFAULT_CONFIG = {
   fastExecution: true, // Millisecond Turbo Execution
   decisionInterval: 1,
   postTradeCooldown: 1,
+  overUnderDirection: 'OVER', // 'OVER' or 'UNDER'
+  barrier: 4, // 1 to 8
+  evenOddMode: 'auto', // 'auto', 'even', 'odd'
   avoidLastLosingDigit: false,
   avoidLastExitDigit: false,
   useMartingale: true,
@@ -34,6 +37,21 @@ export const loadStoredConfig = () => {
     if (parsed.apiToken && parsed.apiToken.includes('a9e587db13e86cfdad0bc1aae8af0d9cb004f1777dea2c4bed46cb69fe64977a')) {
       parsed.apiToken = '';
     }
+
+    // Migrate old strategy IDs if needed
+    const validIds = ['differs-combo-9', 'matches-sniper-76', 'even-odd-wave', 'over-under-barrier'];
+    if (parsed.strategyId && !validIds.includes(parsed.strategyId)) {
+      if (parsed.strategyId.includes('matches')) {
+        parsed.strategyId = 'matches-sniper-76';
+      } else if (parsed.strategyId.includes('over') || parsed.strategyId.includes('fold')) {
+        parsed.strategyId = 'over-under-barrier';
+      } else if (parsed.strategyId.includes('even') || parsed.strategyId.includes('odd')) {
+        parsed.strategyId = 'even-odd-wave';
+      } else {
+        parsed.strategyId = 'differs-combo-9';
+      }
+    }
+
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch (e) {
     console.error('Failed to load config from storage', e);

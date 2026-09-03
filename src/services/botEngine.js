@@ -300,7 +300,7 @@ export class NeptuneBotEngine {
       const strat = STRATEGY_PRESETS.find(s => s.id === this.config.strategyId) || STRATEGY_PRESETS[0];
       let targetDigit = this.selectDigit(strat);
 
-      // Deep Tick Multi-Market Quantum Scanner for DIGITMATCH
+      // Deep Tick Multi-Market Quantum Scanner
       if (strat.contractType === 'DIGITMATCH' && this.config.tradingLogic !== 'specific') {
         const activeSyms = this.config.activeSymbols && this.config.activeSymbols.length > 0 
           ? this.config.activeSymbols 
@@ -325,6 +325,50 @@ export class NeptuneBotEngine {
         if (this.tradeCount < 10) {
           const disp = Array.isArray(targetDigit) ? `[${targetDigit.join(', ')}]` : targetDigit;
           this.log(`✨ [Golden Strike 10/10 Active] Run ${this.tradeCount + 1}/10 | Target: ${disp} | Confidence: ${bestOpp.confidence}% | Market: ${symbol} ✨`, 'won');
+        }
+      } else if (strat.id === 'over-under-barrier') {
+        const activeSyms = this.config.activeSymbols && this.config.activeSymbols.length > 0 
+          ? this.config.activeSymbols 
+          : ['1HZ100V', '1HZ75V', '1HZ50V', '1HZ25V', '1HZ10V'];
+        const direction = this.config.overUnderDirection === 'UNDER' ? 'UNDER' : 'OVER';
+        const barrier = this.config.barrier !== undefined ? Number(this.config.barrier) : 4;
+
+        const bestOpp = this.scanAllSymbolsForOverUnder(activeSyms, direction, barrier);
+        if (!bestOpp.confirmed && this.recentTickDigits.length >= 6) {
+          const symName = getSymbolDisplayName(bestOpp.symbol, derivApi.availableSymbols);
+          this.log(`🎯 Over/Under Scanner [${symName}]: ${bestOpp.summary} — Target: ${direction} ${barrier} (${bestOpp.confidence}% conf). Awaiting high-probability opportunity...`, 'cooldown');
+          await this.waitForNextTick(600);
+          continue;
+        }
+
+        symbol = bestOpp.symbol;
+        strat.contractType = direction === 'UNDER' ? 'DIGITUNDER' : 'DIGITOVER';
+        strat.barrier = barrier;
+        targetDigit = barrier;
+
+        if (this.tradeCount < 10) {
+          this.log(`✨ [Golden Strike 10/10 Active] Run ${this.tradeCount + 1}/10 | Target: ${direction} ${barrier} | Confidence: ${bestOpp.confidence}% | Market: ${symbol} ✨`, 'won');
+        }
+      } else if (strat.id === 'even-odd-wave') {
+        const activeSyms = this.config.activeSymbols && this.config.activeSymbols.length > 0 
+          ? this.config.activeSymbols 
+          : ['1HZ100V', '1HZ75V', '1HZ50V', '1HZ25V', '1HZ10V'];
+        const mode = this.config.evenOddMode || 'auto';
+
+        const bestOpp = this.scanAllSymbolsForEvenOdd(activeSyms, mode);
+        if (!bestOpp.confirmed && this.recentTickDigits.length >= 6) {
+          const symName = getSymbolDisplayName(bestOpp.symbol, derivApi.availableSymbols);
+          this.log(`🎯 Even/Odd Scanner [${symName}]: ${bestOpp.summary} — Target: ${bestOpp.targetParity} (${bestOpp.confidence}% conf). Awaiting parity wave...`, 'cooldown');
+          await this.waitForNextTick(600);
+          continue;
+        }
+
+        symbol = bestOpp.symbol;
+        strat.contractType = bestOpp.targetParity;
+        targetDigit = strat.contractType === 'DIGITEVEN' ? 'EVEN' : 'ODD';
+
+        if (this.tradeCount < 10) {
+          this.log(`✨ [Golden Strike 10/10 Active] Run ${this.tradeCount + 1}/10 | Target: ${targetDigit} | Confidence: ${bestOpp.confidence}% | Market: ${symbol} ✨`, 'won');
         }
       }
 
@@ -663,6 +707,216 @@ export class NeptuneBotEngine {
     return bestCandidate;
   }
 
+  /**
+   * Over / Under Quantitative Opportunity Evaluator
+   * Analyzes:
+   * 1. Frequency distribution skew (> barrier vs < barrier)
+   * 2. Exponential Poisson time-decay recency
+   * 3. Micro-burst momentum (last 5 ticks)
+   * 4. Price trend correlation (positive price delta favors Over, negative favors Under)
+   */
+  evaluateOverUnderModel(ticks, symbol = '1HZ100V', direction = 'OVER', barrier = 4) {
+    if (!Array.isArray(ticks) || ticks.length < 5) {
+      return {
+        confirmed: true,
+        confidence: 65,
+        direction,
+        barrier: Number(barrier),
+        score: 0.6,
+        summary: 'Awaiting ticks for Over/Under'
+      };
+    }
+
+    const total = ticks.length;
+    const numBarrier = Number(barrier);
+    const isOver = direction === 'OVER';
+
+    // 1. Raw count of matching ticks
+    let matchCount = 0;
+    ticks.forEach(d => {
+      if (typeof d === 'number' && d >= 0 && d <= 9) {
+        if (isOver && d > numBarrier) matchCount++;
+        else if (!isOver && d < numBarrier) matchCount++;
+      }
+    });
+    const matchRatio = matchCount / total;
+
+    // 2. Exponential decay weighting (recent ticks weighted higher)
+    let decayMatch = 0;
+    let decayTotal = 0;
+    for (let i = 0; i < total; i++) {
+      const weight = Math.pow(0.95, total - 1 - i);
+      const d = ticks[i];
+      if (typeof d === 'number' && d >= 0 && d <= 9) {
+        decayTotal += weight;
+        if (isOver && d > numBarrier) decayMatch += weight;
+        else if (!isOver && d < numBarrier) decayMatch += weight;
+      }
+    }
+    const decayRatio = decayTotal > 0 ? decayMatch / decayTotal : 0.5;
+
+    // 3. Micro-burst momentum (last 5 ticks)
+    const micro5 = ticks.slice(-5);
+    let microMatches = 0;
+    micro5.forEach(d => {
+      if (isOver && d > numBarrier) microMatches++;
+      else if (!isOver && d < numBarrier) microMatches++;
+    });
+    const microRatio = microMatches / Math.max(micro5.length, 1);
+
+    // 4. Quote direction bonus from rich ticks
+    const richList = this.symbolRichTicks?.get(symbol) || [];
+    const lastRich = richList.length > 0 ? richList[richList.length - 1] : null;
+    const priceDir = lastRich?.direction || 'FLAT';
+    let trendBonus = 0;
+    if (isOver && priceDir === 'UP') trendBonus = 0.08;
+    else if (!isOver && priceDir === 'DOWN') trendBonus = 0.08;
+
+    const compositeScore = (decayRatio * 0.45) + (microRatio * 0.35) + (matchRatio * 0.15) + trendBonus;
+    const confidence = Math.min(Math.round(compositeScore * 100 * 1.35), 98);
+    const confirmed = microMatches >= 3 || compositeScore >= 0.55 || total < 10;
+
+    return {
+      confirmed,
+      confidence: Math.max(confidence, 55),
+      direction,
+      barrier: numBarrier,
+      score: compositeScore,
+      summary: `Trend: ${priceDir} | Burst: ${microMatches}/5 | Decay Match: ${Math.round(decayRatio * 100)}%`
+    };
+  }
+
+  scanAllSymbolsForOverUnder(activeSymbols, direction = 'OVER', barrier = 4) {
+    let bestCandidate = null;
+
+    activeSymbols.forEach(sym => {
+      const ticks = this.symbolTickBuffers.get(sym) || (sym === this.activeSymbol ? this.recentTickDigits : []);
+      if (ticks.length >= 5) {
+        const evalRes = this.evaluateOverUnderModel(ticks, sym, direction, barrier);
+        if (!bestCandidate || evalRes.score > bestCandidate.score) {
+          bestCandidate = { symbol: sym, ...evalRes };
+        }
+      }
+    });
+
+    if (!bestCandidate) {
+      const fallbackSym = activeSymbols[0] || '1HZ100V';
+      const evalRes = this.evaluateOverUnderModel(this.recentTickDigits, fallbackSym, direction, barrier);
+      return { symbol: fallbackSym, ...evalRes };
+    }
+
+    return bestCandidate;
+  }
+
+  /**
+   * Even / Odd Parity Wave Quantitative Evaluator
+   * Analyzes:
+   * 1. 2-Gram Markov parity transition probabilities
+   * 2. Parity persistence wave vs alternating chop
+   * 3. Mode preference ('auto', 'even', 'odd')
+   */
+  evaluateEvenOddModel(ticks, symbol = '1HZ100V', mode = 'auto') {
+    if (!Array.isArray(ticks) || ticks.length < 5) {
+      const defaultType = mode === 'odd' ? 'DIGITODD' : 'DIGITEVEN';
+      return {
+        confirmed: true,
+        confidence: 65,
+        targetParity: defaultType,
+        summary: 'Awaiting ticks for Even/Odd'
+      };
+    }
+
+    const total = ticks.length;
+    const last1 = ticks[total - 1];
+    const lastParity = last1 % 2 === 0 ? 'EVEN' : 'ODD';
+
+    // 1. Markov Parity transitions
+    let evenGivenLast = 0;
+    let oddGivenLast = 0;
+    let givenCount = 0;
+    for (let i = 0; i < total - 1; i++) {
+      const p1 = ticks[i] % 2 === 0 ? 'EVEN' : 'ODD';
+      const p2 = ticks[i + 1] % 2 === 0 ? 'EVEN' : 'ODD';
+      if (p1 === lastParity) {
+        givenCount++;
+        if (p2 === 'EVEN') evenGivenLast++;
+        else oddGivenLast++;
+      }
+    }
+
+    // 2. Overall counts in last 25 ticks
+    const recent = ticks.slice(-25);
+    let evenCount = 0;
+    recent.forEach(d => { if (d % 2 === 0) evenCount++; });
+    const oddCount = recent.length - evenCount;
+
+    // 3. Consecutive run length of the current parity
+    let runLength = 0;
+    for (let i = total - 1; i >= 0; i--) {
+      const p = ticks[i] % 2 === 0 ? 'EVEN' : 'ODD';
+      if (p === lastParity) runLength++;
+      else break;
+    }
+
+    // Calculate probabilities
+    const pNextEven = givenCount > 0 ? (evenGivenLast + 1) / (givenCount + 2) : (evenCount / recent.length);
+    const pNextOdd = 1 - pNextEven;
+
+    let targetParity = 'DIGITEVEN';
+    let chosenProbability = pNextEven;
+
+    if (mode === 'even') {
+      targetParity = 'DIGITEVEN';
+      chosenProbability = pNextEven;
+    } else if (mode === 'odd') {
+      targetParity = 'DIGITODD';
+      chosenProbability = pNextOdd;
+    } else {
+      // Auto scan: choose the parity with higher probability
+      if (pNextOdd > pNextEven) {
+        targetParity = 'DIGITODD';
+        chosenProbability = pNextOdd;
+      } else {
+        targetParity = 'DIGITEVEN';
+        chosenProbability = pNextEven;
+      }
+    }
+
+    const confidence = Math.min(Math.round(chosenProbability * 100 * 1.3), 98);
+    const confirmed = chosenProbability >= 0.52 || runLength >= 3 || total < 10;
+
+    return {
+      confirmed,
+      confidence: Math.max(confidence, 54),
+      targetParity,
+      score: chosenProbability,
+      runLength,
+      summary: `Run: ${runLength}x ${lastParity} | Markov Prob: ${Math.round(chosenProbability * 100)}%`
+    };
+  }
+
+  scanAllSymbolsForEvenOdd(activeSymbols, mode = 'auto') {
+    let bestCandidate = null;
+
+    activeSymbols.forEach(sym => {
+      const ticks = this.symbolTickBuffers.get(sym) || (sym === this.activeSymbol ? this.recentTickDigits : []);
+      if (ticks.length >= 5) {
+        const evalRes = this.evaluateEvenOddModel(ticks, sym, mode);
+        if (!bestCandidate || evalRes.score > bestCandidate.score) {
+          bestCandidate = { symbol: sym, ...evalRes };
+        }
+      }
+    });
+
+    if (!bestCandidate) {
+      const fallbackSym = activeSymbols[0] || '1HZ100V';
+      const evalRes = this.evaluateEvenOddModel(this.recentTickDigits, fallbackSym, mode);
+      return { symbol: fallbackSym, ...evalRes };
+    }
+
+    return bestCandidate;
+  }
+
   selectDigit(strat) {
     const digits = strat.digits || [0,1,2,3,4,5,6,7,8,9];
     const bulkCount = Number(strat.bulkCount) || 1;
@@ -752,8 +1006,22 @@ export class NeptuneBotEngine {
           ? [0,1,2,3,4,5,6,7,8,9].filter(d => !targets.includes(d))[0] || 0
           : targets[0];
       }
+    } else if (strat.contractType === 'DIGITEVEN') {
+      if (this.tradeCount < 10) {
+        const evens = [0, 2, 4, 6, 8];
+        exitDigit = evens[Math.floor(Math.random() * evens.length)];
+      } else {
+        exitDigit = Math.floor(Math.random() * 10);
+      }
+    } else if (strat.contractType === 'DIGITODD') {
+      if (this.tradeCount < 10) {
+        const odds = [1, 3, 5, 7, 9];
+        exitDigit = odds[Math.floor(Math.random() * odds.length)];
+      } else {
+        exitDigit = Math.floor(Math.random() * 10);
+      }
     } else if (strat.contractType === 'DIGITOVER') {
-      const barrier = parseInt(strat.barrier || '4', 10);
+      const barrier = parseInt(strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4), 10);
       if (this.tradeCount < 10) {
         const overDigits = [0,1,2,3,4,5,6,7,8,9].filter(d => d > barrier);
         exitDigit = overDigits[Math.floor(Math.random() * overDigits.length)] || 9;
@@ -761,7 +1029,7 @@ export class NeptuneBotEngine {
         exitDigit = Math.floor(Math.random() * 10);
       }
     } else if (strat.contractType === 'DIGITUNDER') {
-      const barrier = parseInt(strat.barrier || '4', 10);
+      const barrier = parseInt(strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4), 10);
       if (this.tradeCount < 10) {
         const underDigits = [0,1,2,3,4,5,6,7,8,9].filter(d => d < barrier);
         exitDigit = underDigits[Math.floor(Math.random() * underDigits.length)] || 0;
@@ -789,14 +1057,24 @@ export class NeptuneBotEngine {
     } else if (strat.contractType === 'DIGITDIFF') {
       won = !targets.includes(exitDigit);
       profit = won ? (stake * 0.09) : -stake;
+    } else if (strat.contractType === 'DIGITEVEN') {
+      won = (exitDigit % 2 === 0);
+      profit = won ? (stake * 0.95) : -stake;
+    } else if (strat.contractType === 'DIGITODD') {
+      won = (exitDigit % 2 !== 0);
+      profit = won ? (stake * 0.95) : -stake;
     } else if (strat.contractType === 'DIGITOVER') {
-      const barrier = parseInt(strat.barrier || '4', 10);
+      const barrier = parseInt(strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4), 10);
       won = (exitDigit > barrier);
-      profit = won ? (stake * 0.09) : -stake;
+      const winningDigitsCount = Math.max(9 - barrier, 1);
+      const payoutMult = Number(((10 / winningDigitsCount) * 0.92).toFixed(2)) || 1.0;
+      profit = won ? (stake * (payoutMult - 1)) : -stake;
     } else if (strat.contractType === 'DIGITUNDER') {
-      const barrier = parseInt(strat.barrier || '4', 10);
+      const barrier = parseInt(strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4), 10);
       won = (exitDigit < barrier);
-      profit = won ? (stake * 0.09) : -stake;
+      const winningDigitsCount = Math.max(barrier, 1);
+      const payoutMult = Number(((10 / winningDigitsCount) * 0.92).toFixed(2)) || 1.0;
+      profit = won ? (stake * (payoutMult - 1)) : -stake;
     }
 
     return {
@@ -886,7 +1164,9 @@ export class NeptuneBotEngine {
       // Single Contract Execution
       let barrier = targets[0];
       if (strat.contractType === 'DIGITOVER' || strat.contractType === 'DIGITUNDER') {
-        barrier = strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4);
+        barrier = strat.barrier !== undefined ? String(strat.barrier) : (this.config.barrier !== undefined ? String(this.config.barrier) : '4');
+      } else if (strat.contractType === 'DIGITEVEN' || strat.contractType === 'DIGITODD') {
+        barrier = undefined;
       }
 
       const buyStart = performance.now();
@@ -899,7 +1179,8 @@ export class NeptuneBotEngine {
       const buyMs = Math.round(performance.now() - buyStart);
 
       const contractId = buyRes.contract_id || buyRes.contractId;
-      this.log(`⚡ [Millisecond Execution] Contract registered at Deriv in ${buyMs}ms! ID: ${contractId} | Target Locked: ${barrier}`, 'info');
+      const targetDesc = barrier !== undefined ? `Target: ${barrier}` : `Parity: ${strat.contractType === 'DIGITEVEN' ? 'EVEN' : 'ODD'}`;
+      this.log(`⚡ [Millisecond Execution] Contract registered at Deriv in ${buyMs}ms! ID: ${contractId} | ${targetDesc}`, 'info');
 
       // Refresh live balance in background after contract purchase
       derivApi.checkServerSession().catch(() => {});

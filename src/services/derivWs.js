@@ -517,7 +517,7 @@ export class DerivService {
     }
 
     const parameters = {
-      contract_type: contractType, // 'DIGITDIFF', 'DIGITMATCH', 'DIGITOVER', 'DIGITUNDER'
+      contract_type: contractType, // 'DIGITDIFF', 'DIGITMATCH', 'DIGITOVER', 'DIGITUNDER', 'DIGITEVEN', 'DIGITODD'
       symbol: symbol,
       duration: duration,
       duration_unit: 't', // ticks
@@ -526,7 +526,7 @@ export class DerivService {
       currency: this.currency || 'USD'
     };
 
-    if (barrier !== undefined && barrier !== null) {
+    if (barrier !== undefined && barrier !== null && contractType !== 'DIGITEVEN' && contractType !== 'DIGITODD') {
       parameters.barrier = barrier.toString();
     }
 
