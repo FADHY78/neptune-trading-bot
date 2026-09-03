@@ -602,7 +602,8 @@ export class DerivService {
 
           this.emit('onTickHistory', {
             symbol: data.echo_req?.ticks_history,
-            digits
+            digits,
+            prices: data.history.prices
           });
         }
         break;

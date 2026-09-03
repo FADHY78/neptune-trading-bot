@@ -219,13 +219,13 @@ export function App() {
 
     const onTick = (tickData) => {
       if (tickData && tickData.lastDigit !== undefined) {
-        botEngine.recordTickDigit(tickData.lastDigit, tickData.symbol);
+        botEngine.recordTickDigit(tickData.lastDigit, tickData.symbol, tickData.quote);
       }
     };
 
     const onHist = (histData) => {
       if (histData && Array.isArray(histData.digits)) {
-        botEngine.loadHistoricalDigits(histData.digits, histData.symbol);
+        botEngine.loadHistoricalDigits(histData.digits, histData.symbol, histData.prices || []);
       }
     };
 

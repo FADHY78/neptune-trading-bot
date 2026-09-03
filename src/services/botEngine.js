@@ -101,7 +101,7 @@ export class NeptuneBotEngine {
     this.log('Session metrics & trade counters reset.', 'info');
   }
 
-  recordTickDigit(digit, symbol = this.activeSymbol || '1HZ100V') {
+  recordTickDigit(digit, symbol = this.activeSymbol || '1HZ100V', quote = 0) {
     if (typeof digit !== 'number' || isNaN(digit)) return;
     
     // 1. Update main recent ticks
@@ -115,7 +115,7 @@ export class NeptuneBotEngine {
     });
     this.digitCounts = counts;
 
-    // 2. Update per-symbol buffer
+    // 2. Update per-symbol buffer & rich tick data
     if (symbol) {
       if (!this.symbolTickBuffers.has(symbol)) {
         this.symbolTickBuffers.set(symbol, []);
@@ -129,12 +129,34 @@ export class NeptuneBotEngine {
         if (d >= 0 && d <= 9) sCounts[d]++;
       });
       this.symbolDigitCounts.set(symbol, sCounts);
+
+      // Rich tick tracking
+      if (!this.symbolRichTicks) {
+        this.symbolRichTicks = new Map();
+      }
+      if (!this.symbolRichTicks.has(symbol)) {
+        this.symbolRichTicks.set(symbol, []);
+      }
+      const richList = this.symbolRichTicks.get(symbol);
+      const prevTick = richList.length > 0 ? richList[richList.length - 1] : null;
+      const numQuote = Number(quote) || 0;
+      const priceDelta = prevTick && numQuote > 0 ? numQuote - prevTick.quote : 0;
+      const direction = priceDelta > 0 ? 'UP' : (priceDelta < 0 ? 'DOWN' : 'FLAT');
+
+      richList.push({
+        quote: numQuote,
+        lastDigit: digit,
+        priceDelta,
+        direction,
+        epoch: Date.now()
+      });
+      if (richList.length > 100) richList.shift();
     }
 
     this.notify();
   }
 
-  loadHistoricalDigits(digits, symbol = this.activeSymbol || '1HZ100V') {
+  loadHistoricalDigits(digits, symbol = this.activeSymbol || '1HZ100V', prices = []) {
     if (!Array.isArray(digits) || digits.length === 0) return;
     const clean = digits.slice(-100);
 
@@ -145,6 +167,25 @@ export class NeptuneBotEngine {
         if (typeof d === 'number' && d >= 0 && d <= 9) sCounts[d]++;
       });
       this.symbolDigitCounts.set(symbol, sCounts);
+
+      // Initialize rich list
+      if (!this.symbolRichTicks) this.symbolRichTicks = new Map();
+      const richList = [];
+      const cleanPrices = Array.isArray(prices) ? prices.slice(-clean.length) : [];
+      for (let i = 0; i < clean.length; i++) {
+        const q = cleanPrices[i] || 0;
+        const prevQ = i > 0 ? cleanPrices[i - 1] : q;
+        const pDelta = q - prevQ;
+        const dir = pDelta > 0 ? 'UP' : (pDelta < 0 ? 'DOWN' : 'FLAT');
+        richList.push({
+          quote: q,
+          lastDigit: clean[i],
+          priceDelta: pDelta,
+          direction: dir,
+          epoch: Date.now() - (clean.length - i) * 1000
+        });
+      }
+      this.symbolRichTicks.set(symbol, richList);
     }
 
     this.recentTickDigits = clean;
@@ -219,7 +260,7 @@ export class NeptuneBotEngine {
       const strat = STRATEGY_PRESETS.find(s => s.id === this.config.strategyId) || STRATEGY_PRESETS[0];
       let targetDigit = this.selectDigit(strat);
 
-      // Multi-Market Quantum Scanner for DIGITMATCH (Matches Sniper Pro)
+      // Deep Tick Multi-Market Quantum Scanner for DIGITMATCH
       if (strat.contractType === 'DIGITMATCH' && this.config.tradingLogic !== 'specific') {
         const activeSyms = this.config.activeSymbols && this.config.activeSymbols.length > 0 
           ? this.config.activeSymbols 
@@ -229,14 +270,14 @@ export class NeptuneBotEngine {
 
         if (!bestOpp.confirmed && this.recentTickDigits.length >= 10) {
           const symName = getSymbolDisplayName(bestOpp.symbol, derivApi.availableSymbols);
-          this.log(`🎯 Matches Quantum Radar: Scanning [${activeSyms.length} markets] — Best setup: ${symName} digit ${bestOpp.digit} (${bestOpp.confidence}% conf). Awaiting confluence trigger...`, 'cooldown');
+          this.log(`🎯 Quantum Scanner [${symName}]: ${bestOpp.summary || 'Analyzing ticks'} — Target: ${bestOpp.digit} (${bestOpp.confidence}% conf). Awaiting confluence...`, 'cooldown');
           await this.sleep(1000);
           continue;
         }
 
         // Lock in the highest probability market & digit
         symbol = bestOpp.symbol;
-        targetDigit = bestOpp.digit;
+        targetDigit = strat.bulkCount > 1 ? bestOpp.rankedDigits.slice(0, strat.bulkCount) : bestOpp.digit;
       }
 
       // Filters
@@ -303,14 +344,15 @@ export class NeptuneBotEngine {
   }
 
   /**
-   * Quantum Statistical Multi-Model Evaluator for DIGITMATCH
+   * Deep Quantum Multi-Model Evaluator for DIGITMATCH
    * Evaluates:
-   * 1. Order-3 (Tri-Gram), Order-2 (Di-Gram), and Order-1 (Uni-Gram) Markov Transitions
-   * 2. Digit Delta / Velocity Oscillation Matrix
-   * 3. Micro-Burst Volatility Clustering (last 10 ticks)
-   * 4. Double-Tap / Repetition Inertia
+   * 1. Order-3 (Tri-Gram) & Order-2 (Di-Gram) Markov Transitions
+   * 2. Quote Directional Movement Correlation (UP / DOWN)
+   * 3. Parity (Even / Odd) Persistence Wave Resonance
+   * 4. Digit Delta Modulo Jump Velocity Oscillator
+   * 5. Micro-Burst Momentum & Double-Tap Inertia
    */
-  evaluateMatchesModel(ticks, allowedDigits = [0,1,2,3,4,5,6,7,8,9]) {
+  evaluateMatchesModel(ticks, allowedDigits = [0,1,2,3,4,5,6,7,8,9], symbol = '1HZ100V') {
     if (!Array.isArray(ticks) || ticks.length < 6) {
       const fallbackList = allowedDigits.slice(0, 3);
       return {
@@ -320,7 +362,8 @@ export class NeptuneBotEngine {
         confidence: 10,
         confirmed: false,
         score: 0,
-        lastDigit: '-'
+        lastDigit: '-',
+        summary: 'Awaiting ticks'
       };
     }
 
@@ -329,6 +372,12 @@ export class NeptuneBotEngine {
     const last2 = ticks[total - 2];
     const last3 = ticks[total - 3];
     const last4 = ticks[total - 4];
+
+    // Rich tick metadata
+    const richList = this.symbolRichTicks?.get(symbol) || [];
+    const lastRich = richList.length > 0 ? richList[richList.length - 1] : null;
+    const currentDirection = lastRich?.direction || 'FLAT';
+    const currentParity = last1 % 2 === 0 ? 'EVEN' : 'ODD';
 
     // Model 1: Order-3 (Tri-Gram) Markov Transition: P(D_t | D_{t-3}, D_{t-2}, D_{t-1})
     const markov3Counts = Array(10).fill(0);
@@ -371,7 +420,33 @@ export class NeptuneBotEngine {
       }
     }
 
-    // Model 4: Digit Delta Velocity ((D_t - D_{t-1} + 10) % 10)
+    // Model 4: Quote Directional Movement Correlation (P(D | Direction = UP / DOWN))
+    const dirCounts = Array(10).fill(0);
+    let dirTotal = 0;
+    if (richList.length >= 10) {
+      for (let i = 0; i < richList.length - 1; i++) {
+        if (richList[i].direction === currentDirection) {
+          const nextD = richList[i + 1].lastDigit;
+          if (nextD >= 0 && nextD <= 9) {
+            dirCounts[nextD]++;
+            dirTotal++;
+          }
+        }
+      }
+    }
+
+    // Model 5: Parity Continuation Resonance
+    let parityContinuations = 0;
+    let parityTransitions = 0;
+    for (let i = 0; i < total - 1; i++) {
+      const p1 = ticks[i] % 2;
+      const p2 = ticks[i + 1] % 2;
+      if (p1 === p2) parityContinuations++;
+      else parityTransitions++;
+    }
+    const parityPrefersSame = parityContinuations >= parityTransitions;
+
+    // Model 6: Digit Delta Velocity ((D_t - D_{t-1} + 10) % 10)
     const deltaCounts = Array(10).fill(0);
     let totalDeltas = 0;
     for (let i = Math.max(0, total - 25); i < total - 1; i++) {
@@ -389,16 +464,16 @@ export class NeptuneBotEngine {
     });
     const deltaPredictedDigit = (last1 + dominantDelta) % 10;
 
-    // Model 5: Micro-Burst Window (Last 10 ticks)
+    // Model 7: Micro-Burst Window (Last 10 ticks)
     const micro10 = ticks.slice(-10);
     const microCounts = Array(10).fill(0);
     micro10.forEach(d => { if (d >= 0 && d <= 9) microCounts[d]++; });
 
-    // Model 6: Macro Frequency (All buffer ticks)
+    // Model 8: Macro Frequency
     const macroCounts = Array(10).fill(0);
     ticks.forEach(d => { if (d >= 0 && d <= 9) macroCounts[d]++; });
 
-    // Model 7: Double-Tap / Sibling Resonance
+    // Model 9: Double-Tap & Sibling Resonance
     const isDoubleTap = (last1 === last2) || (last1 === last3);
 
     // Multi-Model Composite Scoring for all allowed digits
@@ -406,18 +481,27 @@ export class NeptuneBotEngine {
       const sMarkov3 = markov3Total > 0 ? (markov3Counts[d] / markov3Total) : 0;
       const sMarkov2 = markov2Total > 0 ? (markov2Counts[d] / markov2Total) : 0;
       const sMarkov1 = markov1Total > 0 ? (markov1Counts[d] / markov1Total) : 0.1;
+      const sDirection = dirTotal > 0 ? (dirCounts[d] / dirTotal) : 0.1;
       const sDelta = (d === deltaPredictedDigit && totalDeltas > 0) ? (dominantDeltaCount / totalDeltas) : 0;
       const sMicro = microCounts[d] / Math.max(micro10.length, 1);
       const sMacro = macroCounts[d] / Math.max(ticks.length, 1);
+
+      // Parity matching bonus
+      const dParity = d % 2 === 0 ? 'EVEN' : 'ODD';
+      const sParity = (parityPrefersSame && dParity === currentParity) ? 0.08 : (!parityPrefersSame && dParity !== currentParity ? 0.08 : 0);
+
+      // Repeat / Double-tap bonus
       const sRepeat = (isDoubleTap && d === last1) ? 0.18 : (micro10.slice(-3).includes(d) ? 0.06 : 0);
 
       const compositeScore = 
-        (sMarkov3 * 0.30) +
-        (sMarkov2 * 0.25) +
-        (sMarkov1 * 0.20) +
+        (sMarkov3 * 0.25) +
+        (sMarkov2 * 0.20) +
+        (sDirection * 0.15) +
         (sDelta * 0.15) +
-        (sMicro * 0.07) +
-        (sMacro * 0.03) +
+        (sMarkov1 * 0.10) +
+        (sMicro * 0.10) +
+        (sMacro * 0.05) +
+        sParity +
         sRepeat;
 
       return {
@@ -426,16 +510,17 @@ export class NeptuneBotEngine {
       };
     });
 
-    // Sort from highest score to lowest
     scoredList.sort((a, b) => b.score - a.score);
 
     const best = scoredList[0];
-    const confidence = Math.min(Math.round(best.score * 100 * 2.6), 99);
+    const confidence = Math.min(Math.round(best.score * 100 * 2.8), 99);
     const hasMarkov3 = markov3Counts[best.digit] >= 1;
     const hasMarkov2 = markov2Counts[best.digit] >= 2;
     const hasBurst = microCounts[best.digit] >= 3;
     const hasHighConfidence = best.score >= 0.28;
     const confirmed = hasMarkov3 || hasMarkov2 || hasBurst || hasHighConfidence || total < 15;
+
+    const summary = `Trend: ${currentDirection} | Parity: ${currentParity} | Micro: ${microCounts[best.digit]}/10`;
 
     return {
       digit: best.digit,
@@ -444,7 +529,10 @@ export class NeptuneBotEngine {
       confidence,
       confirmed,
       score: best.score,
-      lastDigit: last1
+      lastDigit: last1,
+      direction: currentDirection,
+      parity: currentParity,
+      summary
     };
   }
 
@@ -454,7 +542,7 @@ export class NeptuneBotEngine {
     activeSymbols.forEach(sym => {
       const ticks = this.symbolTickBuffers.get(sym) || (sym === this.activeSymbol ? this.recentTickDigits : []);
       if (ticks.length >= 6) {
-        const evalRes = this.evaluateMatchesModel(ticks, stratDigits);
+        const evalRes = this.evaluateMatchesModel(ticks, stratDigits, sym);
         if (!bestCandidate || evalRes.score > bestCandidate.score) {
           bestCandidate = {
             symbol: sym,
@@ -466,7 +554,7 @@ export class NeptuneBotEngine {
 
     if (!bestCandidate) {
       const fallbackSym = activeSymbols[0] || '1HZ100V';
-      const evalRes = this.evaluateMatchesModel(this.recentTickDigits, stratDigits);
+      const evalRes = this.evaluateMatchesModel(this.recentTickDigits, stratDigits, fallbackSym);
       return { symbol: fallbackSym, ...evalRes };
     }
 
