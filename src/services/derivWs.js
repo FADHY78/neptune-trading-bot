@@ -425,6 +425,17 @@ export class DerivService {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         await this.connectPublicWs();
       }
+
+      // 1. Fetch historical ticks to pre-populate frequency visualizer immediately
+      this.send({
+        ticks_history: symbol,
+        adjust_start_time: 1,
+        count: 100,
+        end: 'latest',
+        style: 'ticks'
+      }).catch(() => {});
+
+      // 2. Subscribe to live real-time tick stream
       const res = await this.send({ ticks: symbol, subscribe: 1 });
       if (res && res.subscription) {
         this.activeSubscriptions.set(res.subscription.id, { type: 'tick', symbol });
@@ -578,6 +589,20 @@ export class DerivService {
             displayValue,
             lastDigit,
             epoch: data.tick.epoch
+          });
+        }
+        break;
+
+      case 'history':
+        if (data.history && Array.isArray(data.history.prices)) {
+          const digits = data.history.prices.map(p => {
+            const str = String(p);
+            return parseInt(str.slice(-1), 10);
+          }).filter(d => !isNaN(d));
+
+          this.emit('onTickHistory', {
+            symbol: data.echo_req?.ticks_history,
+            digits
           });
         }
         break;

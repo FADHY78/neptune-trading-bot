@@ -114,6 +114,18 @@ export class NeptuneBotEngine {
     this.notify();
   }
 
+  loadHistoricalDigits(digits) {
+    if (!Array.isArray(digits) || digits.length === 0) return;
+    this.recentTickDigits = digits.slice(-100);
+    const counts = Array(10).fill(0);
+    this.recentTickDigits.forEach(d => {
+      if (typeof d === 'number' && d >= 0 && d <= 9) counts[d]++;
+    });
+    this.digitCounts = counts;
+    this.log(`Loaded ${this.recentTickDigits.length} live market ticks for real-time digit frequency analysis.`, 'info');
+    this.notify();
+  }
+
   start(config) {
     if (this.running) return;
     this.config = config;
@@ -128,11 +140,10 @@ export class NeptuneBotEngine {
     this.log(`Selected Strategy: ${strat.name}`, 'info');
     this.log(`Initial Stake: $${this.currentStake.toFixed(2)} | Take Profit: $${config.takeProfit} | Stop Loss: $${config.stopLoss}`, 'info');
 
-    // Subscribe to Deriv tick stream if online
+    // Ensure live ticks are subscribed for active symbols
     if (!config.simulationMode && derivApi.connected) {
       const activeSymbols = config.activeSymbols || ['1HZ100V'];
       activeSymbols.forEach(sym => derivApi.subscribeTick(sym));
-      derivApi.on('onTick', (tickData) => this.recordTickDigit(tickData.lastDigit));
     }
 
     // Start Trading Loop
@@ -251,26 +262,45 @@ export class NeptuneBotEngine {
       return digits[Math.floor(Math.random() * digits.length)];
     }
 
-    // Analyze Mode: frequency-based selection tailored to strategy type
+    // Analyze Mode: Statistical Frequency & Absence Analysis
     if (this.digitCounts.some(c => c > 0)) {
       if (strat.contractType === 'DIGITDIFF') {
-        // Differs: Target the least frequent digit (coldest)
+        // In Differs: We WIN when the exit digit is DIFFERENT from our target digit.
+        // Highest probability: target the COLDEST digit (lowest frequency in last 100 ticks).
+        // Tie-breaker: pick the digit absent for the longest duration (oldest last index).
         let minCount = Infinity;
-        let candidate = digits[0];
+        let candidates = [];
         digits.forEach(d => {
-          if (this.digitCounts[d] < minCount) {
-            minCount = this.digitCounts[d];
-            candidate = d;
+          const count = this.digitCounts[d] || 0;
+          if (count < minCount) {
+            minCount = count;
+            candidates = [d];
+          } else if (count === minCount) {
+            candidates.push(d);
           }
         });
-        return candidate;
+
+        if (candidates.length === 1) return candidates[0];
+
+        // Break tie by selecting digit with longest absence
+        let oldestIndex = Infinity;
+        let bestCandidate = candidates[0];
+        candidates.forEach(cand => {
+          const lastIdx = this.recentTickDigits.lastIndexOf(cand);
+          if (lastIdx < oldestIndex) {
+            oldestIndex = lastIdx;
+            bestCandidate = cand;
+          }
+        });
+        return bestCandidate;
       } else if (strat.contractType === 'DIGITMATCH') {
         // Matches: Target the most frequent digit (hottest)
         let maxCount = -1;
         let candidate = digits[0];
         digits.forEach(d => {
-          if (this.digitCounts[d] > maxCount) {
-            maxCount = this.digitCounts[d];
+          const count = this.digitCounts[d] || 0;
+          if (count > maxCount) {
+            maxCount = count;
             candidate = d;
           }
         });

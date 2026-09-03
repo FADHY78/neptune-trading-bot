@@ -223,16 +223,30 @@ export function App() {
       }
     };
 
+    const onHist = (histData) => {
+      if (histData && Array.isArray(histData.digits)) {
+        botEngine.loadHistoricalDigits(histData.digits);
+      }
+    };
+
     derivApi.on('onAuthorize', onAuth);
     derivApi.on('onBalance', onBal);
     derivApi.on('onSymbols', onSyms);
     derivApi.on('onTick', onTick);
+    derivApi.on('onTickHistory', onHist);
+
+    // Immediately connect public feed to start streaming live market data & tick history
+    derivApi.connectPublicWs().then(() => {
+      const activeSym = config?.activeSymbols?.[0] || '1HZ100V';
+      derivApi.subscribeTick(activeSym);
+    }).catch(() => {});
 
     return () => {
       derivApi.off('onAuthorize', onAuth);
       derivApi.off('onBalance', onBal);
       derivApi.off('onSymbols', onSyms);
       derivApi.off('onTick', onTick);
+      derivApi.off('onTickHistory', onHist);
     };
   }, []);
 
