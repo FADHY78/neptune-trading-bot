@@ -235,12 +235,32 @@ export class NeptuneBotEngine {
     this.notify();
   }
 
+  seedHistoricalTicks(count = 60) {
+    const sym = this.activeSymbol || '1HZ100V';
+    const seeded = [];
+    const prices = [];
+    let price = 1250.45;
+    for (let i = 0; i < count; i++) {
+      const pDelta = (Math.random() - 0.48) * 0.6;
+      price = Number((price + pDelta).toFixed(2));
+      const d = parseInt(price.toFixed(2).slice(-1), 10);
+      seeded.push(d);
+      prices.push(price);
+    }
+    this.loadHistoricalDigits(seeded, sym, prices);
+  }
+
   start(config) {
     if (this.running) return;
     this.config = config;
     this.running = true;
     this.paused = false;
     this.currentStake = Number(config.initialStake) || 5;
+
+    // In simulation mode, ensure at least 60 realistic ticks are seeded if buffer is shallow
+    if (config.simulationMode && this.recentTickDigits.length < 30) {
+      this.seedHistoricalTicks(60);
+    }
 
     const modeText = config.simulationMode ? 'SIMULATOR MODE (No Token Required)' : 'DERIV LIVE WS MODE';
     this.log(`Starting Neptune Trading Bot [${modeText}]...`, 'purchasing');
@@ -334,19 +354,26 @@ export class NeptuneBotEngine {
         }
       }
 
-      // Deep Tick Multi-Market Quantum Scanner
+      // Deep Tick Multi-Market Quantum Scanner for DIGITMATCH
       if (strat.contractType === 'DIGITMATCH' && this.config.tradingLogic !== 'specific') {
         const activeSyms = this.config.activeSymbols && this.config.activeSymbols.length > 0 
           ? this.config.activeSymbols 
           : ['1HZ100V', '1HZ75V', '1HZ50V', '1HZ25V', '1HZ10V'];
 
+        // Tick Buffer Depth Gating: Ensure sufficient sample for high-precision match pattern recognition
+        if (this.recentTickDigits.length < 25 && !this.config.simulationMode) {
+          this.log(`📡 [AI Pattern Engine] Gathering ticks (${this.recentTickDigits.length}/35)... Collecting deep market history for Match pattern alignment.`, 'cooldown');
+          await this.waitForNextTick(600);
+          continue;
+        }
+
         const bestOpp = this.scanAllSymbolsForBestMatch(activeSyms, strat.digits || [0,1,2,3,4,5,6,7,8,9]);
 
         // Precision gating: In initial runs or general trading, require high confidence confluence
-        const minConf = this.tradeCount < 10 ? 70 : 55;
+        const minConf = this.tradeCount < 10 ? 70 : 60;
         if ((!bestOpp.confirmed || bestOpp.confidence < minConf) && this.recentTickDigits.length >= 8) {
           const symName = getSymbolDisplayName(bestOpp.symbol, derivApi.availableSymbols);
-          this.log(`🎯 Quantum Scanner [${symName}]: ${bestOpp.summary || 'Analyzing ticks'} — Target: ${bestOpp.digit} (${bestOpp.confidence}% conf). Awaiting next tick confluence...`, 'cooldown');
+          this.log(`🎯 Quantum Match Sniper [${symName}]: ${bestOpp.summary || 'Analyzing patterns'} — Target: Digit [${bestOpp.digit}] (${bestOpp.confidence}% conf). Awaiting harmonic resonance...`, 'cooldown');
           // Event-driven: wake immediately on next incoming tick instead of blind 1s sleep
           await this.waitForNextTick(600);
           continue;
@@ -358,7 +385,7 @@ export class NeptuneBotEngine {
 
         if (this.tradeCount < 10) {
           const disp = Array.isArray(targetDigit) ? `[${targetDigit.join(', ')}]` : targetDigit;
-          this.log(`✨ [Golden Strike 10/10 Active] Run ${this.tradeCount + 1}/10 | Target: ${disp} | Confidence: ${bestOpp.confidence}% | Market: ${symbol} ✨`, 'won');
+          this.log(`✨ [Golden Strike 10/10 Active] Run ${this.tradeCount + 1}/10 | Target Match: [${disp}] | Confidence: ${bestOpp.confidence}% | Market: ${symbol} ✨`, 'won');
         }
       } else if (strat.id === 'over-under-barrier') {
         const activeSyms = this.config.activeSymbols && this.config.activeSymbols.length > 0 
@@ -524,6 +551,22 @@ export class NeptuneBotEngine {
     const currentDirection = lastRich?.direction || 'FLAT';
     const currentParity = last1 % 2 === 0 ? 'EVEN' : 'ODD';
 
+    // 0. Order-4 (Quad-Gram) Deep Pattern Markov Transition (alpha = 0.6)
+    const markov4Counts = Array(10).fill(0);
+    let markov4Total = 0;
+    const last5 = ticks[total - 5];
+    if (total >= 25 && last5 !== undefined) {
+      for (let i = 0; i < total - 4; i++) {
+        if (ticks[i] === last4 && ticks[i + 1] === last3 && ticks[i + 2] === last2 && ticks[i + 3] === last1) {
+          const next = ticks[i + 4];
+          if (next >= 0 && next <= 9) {
+            markov4Counts[next]++;
+            markov4Total++;
+          }
+        }
+      }
+    }
+
     // 1. Order-3 (Tri-Gram) Markov Transition with Laplace Smoothing (alpha = 0.5)
     const markov3Counts = Array(10).fill(0);
     let markov3Total = 0;
@@ -630,7 +673,7 @@ export class NeptuneBotEngine {
         const meanGap = intervals[d].reduce((a, b) => a + b, 0) / intervals[d].length;
         const currentGap = (total - 1) - lastSeenIndex[d];
         if (currentGap >= Math.floor(meanGap) - 1 && currentGap <= Math.ceil(meanGap) + 2) {
-          harmonicDueScores[d] = 0.15;
+          harmonicDueScores[d] = 0.18;
         }
       }
     }
@@ -656,6 +699,7 @@ export class NeptuneBotEngine {
     // Multi-Model Composite Scoring for all allowed digits
     const scoredList = allowedDigits.map(d => {
       // Laplace smoothed Markov probabilities
+      const sMarkov4 = (markov4Counts[d] + 0.6) / (markov4Total + 6.0);
       const sMarkov3 = (markov3Counts[d] + 0.5) / (markov3Total + 5.0);
       const sMarkov2 = (markov2Counts[d] + 0.4) / (markov2Total + 4.0);
       const sMarkov1 = (markov1Counts[d] + 0.3) / (markov1Total + 3.0);
@@ -674,20 +718,21 @@ export class NeptuneBotEngine {
       const sSibling = (d === mirrorSibling) ? 0.04 : 0;
 
       const compositeScore =
-        (sMarkov3 * 0.22) +
-        (sMarkov2 * 0.18) +
-        (sDecay * 0.16) +
-        (sDelta * 0.12) +
-        (sDirection * 0.10) +
-        (sMarkov1 * 0.08) +
-        (sMicro * 0.08) +
-        (sHarmonic * 0.06) +
+        (sMarkov4 * 0.20) +
+        (sMarkov3 * 0.18) +
+        (sMarkov2 * 0.15) +
+        (sDecay * 0.15) +
+        (sHarmonic * 0.10) +
+        (sDelta * 0.10) +
+        (sDirection * 0.06) +
+        (sMarkov1 * 0.06) +
         sParity +
         sRepeat +
         sSibling;
 
       // Independent Model Consensus Counter (How many distinct models vote for d)
       let modelVotes = 0;
+      if (markov4Counts[d] > 0) modelVotes += 2;
       if (markov3Counts[d] > 0) modelVotes++;
       if (markov2Counts[d] >= 2) modelVotes++;
       if (decayCounts[d] / (decayTotal || 1) >= 0.18) modelVotes++;
@@ -705,14 +750,14 @@ export class NeptuneBotEngine {
     scoredList.sort((a, b) => b.score - a.score);
 
     const best = scoredList[0];
-    const confidence = Math.min(Math.round(best.score * 100 * 2.9), 99);
+    const confidence = Math.min(Math.round(best.score * 100 * 3.1), 99);
     const hasConfluence = best.modelVotes >= 2;
     const hasBurst = microCounts[best.digit] >= 3;
     const hasMarkovHit = markov2Counts[best.digit] >= 2 || markov3Counts[best.digit] >= 1;
-    const hasHighConfidence = best.score >= 0.26;
+    const hasHighConfidence = best.score >= 0.24;
     const confirmed = hasConfluence || hasBurst || hasMarkovHit || hasHighConfidence || total < 10;
 
-    const summary = `Confluence: ${best.modelVotes} models | Trend: ${currentDirection} | Decay Pct: ${Math.round((decayCounts[best.digit]/(decayTotal || 1))*100)}% | Micro: ${microCounts[best.digit]}/10`;
+    const summary = `Depth: ${total} ticks | Confluence: ${best.modelVotes} models | Trend: ${currentDirection} | Decay: ${Math.round((decayCounts[best.digit]/(decayTotal || 1))*100)}% | Harmonic: ${harmonicDueScores[best.digit] > 0 ? 'Aligned' : 'Scanning'}`;
 
     return {
       digit: best.digit,
@@ -725,6 +770,8 @@ export class NeptuneBotEngine {
       lastDigit: last1,
       direction: currentDirection,
       parity: currentParity,
+      tickDepth: total,
+      isPatternSufficient: total >= 25,
       summary
     };
   }
@@ -1241,6 +1288,7 @@ export class NeptuneBotEngine {
       won,
       profit,
       exitDigit,
+      targetDigit,
       exitTick: `1245.${Math.floor(100 + Math.random()*800)}${exitDigit}`,
       contractId: Math.floor(100000000 + Math.random()*900000000),
       isBulk

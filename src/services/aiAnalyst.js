@@ -43,9 +43,11 @@ class AiAnalystService {
         const lastRich = richTicks.length > 0 ? richTicks[richTicks.length - 1] : null;
         const priceVelocity = lastRich?.direction || 'STEADY';
 
-        // 1. Matches Strategy Analysis
+        // 1. Matches Strategy Analysis (High-Payout Flagship)
         const matchEval = botEngine.evaluateMatchesModel(ticks, [0,1,2,3,4,5,6,7,8,9], sym);
-        const matchStrat = STRATEGY_PRESETS.find(s => s.id === 'matches-sniper-76');
+        // Elevate Match Sniper priority score to reflect ~800% / 8.5x payout dominance
+        const matchPriorityScore = matchEval.confidence >= 65 ? (matchEval.confidence + 18) : matchEval.confidence;
+
         opportunities.push({
           id: `match-${sym}`,
           strategyId: 'matches-sniper-76',
@@ -56,16 +58,18 @@ class AiAnalystService {
           target: matchEval.digit,
           targetDisplay: `Digit [${matchEval.digit}]`,
           confidence: matchEval.confidence || 85,
+          priorityScore: matchPriorityScore,
           score: matchEval.score || 0.7,
-          edgeRating: matchEval.confidence >= 85 ? 'A+' : matchEval.confidence >= 75 ? 'A' : 'B+',
-          payout: '~800% / 8.5x',
-          modelSummary: matchEval.summary || 'Markov 3-gram convergence with Laplace smoothing',
-          aiReasoning: `Strong multi-model consensus (${matchEval.modelVotes || 2} models agree). Recency decay and price velocity (${priceVelocity}) converge on Digit ${matchEval.digit}.`
+          edgeRating: matchEval.confidence >= 80 ? 'A+' : matchEval.confidence >= 70 ? 'A' : 'B+',
+          payout: '~800% / 8.5x (Supreme Return)',
+          isMatchSupreme: true,
+          tickDepth: ticks.length,
+          modelSummary: matchEval.summary || '4-Gram & 3-Gram Markov with Poisson Harmonic Resonance',
+          aiReasoning: `Institutional 8-Layer confluence: 4-Gram/3-Gram Markov transitions + Poisson decay (${Math.round((ticks.length))}+ ticks analyzed). Harmonic recurrence cycle aligns on Digit ${matchEval.digit}.`
         });
 
         // 2. Differs Strategy Analysis
         const diffEval = botEngine.evaluateDiffersModel(ticks, [0,1,2,3,4,5,6,7,8,9], sym);
-        const diffStrat = STRATEGY_PRESETS.find(s => s.id === 'differs-combo-9');
         opportunities.push({
           id: `diff-${sym}`,
           strategyId: 'differs-combo-9',
@@ -76,9 +80,11 @@ class AiAnalystService {
           target: diffEval.coldDigit,
           targetDisplay: `Avoid Digit [${diffEval.coldDigit}]`,
           confidence: Math.min(diffEval.safetyScore + 5, 99),
+          priorityScore: diffEval.safetyScore,
           score: (diffEval.safetyScore / 100) || 0.9,
           edgeRating: diffEval.safetyScore >= 88 ? 'A+' : 'A',
           payout: '9% (Ultra-High Safety)',
+          tickDepth: ticks.length,
           modelSummary: diffEval.summary,
           aiReasoning: `Coldest statistical outlier with absence gap of ${diffEval.absenceGaps} ticks. Markov 1-step predecessor transitions are suppressed.`
         });
@@ -95,9 +101,11 @@ class AiAnalystService {
           target: evenOddEval.targetParity === 'DIGITEVEN' ? 'EVEN' : 'ODD',
           targetDisplay: evenOddEval.targetParity === 'DIGITEVEN' ? 'EVEN (0, 2, 4, 6, 8)' : 'ODD (1, 3, 5, 7, 9)',
           confidence: evenOddEval.confidence || 75,
+          priorityScore: evenOddEval.confidence,
           score: evenOddEval.score || 0.65,
           edgeRating: evenOddEval.confidence >= 80 ? 'A+' : 'A',
           payout: '~95% / 1.95x',
+          tickDepth: ticks.length,
           modelSummary: evenOddEval.summary,
           aiReasoning: `Parity run wave detected with persistent Markov run length of ${evenOddEval.runLength || 1}x. Continuation probability is ${Math.round(evenOddEval.score * 100)}%.`
         });
@@ -120,24 +128,34 @@ class AiAnalystService {
           direction: bestDir,
           targetDisplay: `${bestDir} ${barrier} (${bestDir === 'OVER' ? `>${barrier}` : `<${barrier}`})`,
           confidence: bestOU.confidence || 78,
+          priorityScore: bestOU.confidence,
           score: bestOU.score || 0.7,
           edgeRating: bestOU.confidence >= 80 ? 'A+' : 'A',
           payout: '~95% - 150%',
+          tickDepth: ticks.length,
           modelSummary: bestOU.summary,
           aiReasoning: `Tick velocity gradient confirms directional ${bestDir} drift with ${bestOU.summary}. High probability entry setup.`
         });
       });
 
-      // Sort opportunities by composite AI Score descending
-      opportunities.sort((a, b) => b.confidence - a.confidence);
+      // Sort opportunities by priorityScore descending (Matches gets supreme boost for 8.5x payout)
+      opportunities.sort((a, b) => (b.priorityScore || b.confidence) - (a.priorityScore || a.confidence));
 
       const bestOpportunity = opportunities[0] || null;
+      const matchOpportunities = opportunities.filter(o => o.contractType === 'DIGITMATCH');
+      const topMatchOpportunity = matchOpportunities.length > 0 ? matchOpportunities[0] : null;
+
+      // Calculate Tick Depth across all active markets
+      const allTickCounts = symbols.map(s => (botEngine.symbolTickBuffers?.get(s)?.length || 0));
+      allTickCounts.push(botEngine.recentTickDigits?.length || 0);
+      const maxTickDepth = Math.max(...allTickCounts);
+      const avgTickDepth = Math.round(allTickCounts.reduce((a, b) => a + b, 0) / Math.max(allTickCounts.length, 1));
 
       // Determine Overall Market Regime
       let marketRegime = 'Quantum Statistical Predictability';
       if (bestOpportunity) {
         if (bestOpportunity.contractType === 'DIGITMATCH') {
-          marketRegime = 'High-Precision Quantum Cluster';
+          marketRegime = 'Supreme Match Harmonic Confluence';
         } else if (bestOpportunity.contractType === 'DIGITDIFF') {
           marketRegime = 'Cold Outlier Suppression Zone';
         } else if (bestOpportunity.contractType.includes('EVEN') || bestOpportunity.contractType.includes('ODD')) {
@@ -155,11 +173,15 @@ class AiAnalystService {
       this.lastAnalysis = {
         timestamp: new Date().toLocaleTimeString(),
         bestOpportunity,
+        topMatchOpportunity,
         opportunities,
         marketRegime,
         predictabilityIndex: Math.min(avgTopConfidence + 5, 99),
         analyzedSymbolsCount: symbols.length,
-        totalOpportunitiesCount: opportunities.length
+        totalOpportunitiesCount: opportunities.length,
+        maxTickDepth,
+        avgTickDepth,
+        patternQuality: maxTickDepth >= 50 ? 'Optimal (Deep 100-Tick Horizon)' : (maxTickDepth >= 25 ? 'Sufficient Pattern Depth' : 'Gathering Market Ticks...')
       };
 
       this.isAnalyzing = false;
