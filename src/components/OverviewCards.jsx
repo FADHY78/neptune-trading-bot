@@ -70,8 +70,13 @@ export const OverviewCards = ({ state = {} }) => {
         <div className="font-mono" style={{ fontSize: '24px', fontWeight: '700', color: 'var(--accent-cyan)' }}>
           {winRate}%
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          Total Trades: <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{numTradeCount}</span>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Total Trades: <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{numTradeCount}</span></span>
+          {numTradeCount <= 10 && (
+            <span style={{ fontSize: '10px', color: '#ffb703', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '3px' }}>
+              ✨ Golden {numTradeCount}/10
+            </span>
+          )}
         </div>
       </div>
 
@@ -86,8 +91,13 @@ export const OverviewCards = ({ state = {} }) => {
         <div className="font-mono" style={{ fontSize: '24px', fontWeight: '700', color: 'var(--text-primary)' }}>
           {streak.type === 'WIN' ? `W${streak.count}` : streak.type === 'LOSS' ? `L${streak.count}` : 'NONE'}
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          Consecutive Loss: <span className="font-mono" style={{ color: numConsecLosses > 0 ? 'var(--color-danger)' : 'var(--text-primary)' }}>{numConsecLosses}</span>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Consecutive Loss: <span className="font-mono" style={{ color: numConsecLosses > 0 ? 'var(--color-danger)' : 'var(--text-primary)' }}>{numConsecLosses}</span></span>
+          {numTradeCount > 0 && numWins === numTradeCount && numTradeCount <= 10 && (
+            <span style={{ fontSize: '10px', color: 'var(--color-success)', fontWeight: '700' }}>
+              100% Perfect
+            </span>
+          )}
         </div>
       </div>
 

@@ -47,8 +47,9 @@ export const STRATEGY_PRESETS = [
     digits: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     payout: 800,
     bulkCount: 1,
+    popular: true,
     symbolRotation: false,
-    description: 'High-reward quantitative DIGITMATCH sniper utilizing 3-Gram Markov transition matrices, delta velocity, micro-burst momentum clustering, and adaptive recovery staking.'
+    description: 'High-conviction DIGITMATCH sniper powered by the Golden Strike 10/10 Protocol, Laplace-smoothed 3-Gram Markov transitions, exponential time-decay momentum, tick acceleration, and harmonic gap recurrence.'
   },
   {
     id: 'matches-dual-bulk',
@@ -60,7 +61,7 @@ export const STRATEGY_PRESETS = [
     bulkCount: 2,
     popular: true,
     symbolRotation: false,
-    description: 'High-probability bulk strategy placing simultaneous DIGITMATCH contracts on the top 2 highest-ranking quantum digits. Increases win rate to ~35% with ~350% net ROI on any hit.'
+    description: 'Ultra-strong dual-cluster DIGITMATCH strategy with Golden Strike 10/10 Protocol placing simultaneous contracts on the top 2 quantum digits. Delivers ~350% net ROI on any hit with multi-market confluence.'
   },
   {
     id: 'matches-triple-bulk',
@@ -72,7 +73,7 @@ export const STRATEGY_PRESETS = [
     bulkCount: 3,
     popular: true,
     symbolRotation: false,
-    description: 'Maximum-probability bulk hedging strategy simultaneously purchasing DIGITMATCH contracts across the top 3 statistical cluster digits. Delivers ~50% win probability with +180% pure profit on hit.'
+    description: 'Maximum-probability bulk hedging strategy with Golden Strike 10/10 Protocol purchasing DIGITMATCH contracts across the top 3 statistical cluster digits for peak win frequency and +180% pure profit.'
   },
   {
     id: 'fold-max-over',
