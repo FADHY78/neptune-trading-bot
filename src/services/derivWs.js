@@ -441,20 +441,21 @@ export class DerivService {
       const parameters = {
         contract_type: contractType, // 'DIGITDIFF', 'DIGITMATCH', 'DIGITOVER', 'DIGITUNDER'
         symbol: symbol,
-        duration: duration,
+        underlying_symbol: symbol,
+        duration: Number(duration) || 1,
         duration_unit: 't', // ticks
         basis: 'stake',
-        amount: stake,
+        amount: Number(stake),
         currency: this.currency || 'USD'
       };
 
-      if (barrier !== undefined && barrier !== null) {
-        parameters.barrier = barrier.toString();
+      if (barrier !== undefined && barrier !== null && String(barrier).trim() !== '') {
+        parameters.barrier = String(barrier).trim();
       }
 
       const res = await this.send({
-        buy: 1,
-        price: stake,
+        buy: "1",
+        price: Number(stake),
         parameters
       });
 

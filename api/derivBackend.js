@@ -915,20 +915,21 @@ export async function handleTradeBuy(req, res) {
         const parameters = {
           contract_type: contractType,
           symbol: symbol,
-          duration: duration,
+          underlying_symbol: symbol,
+          duration: Number(duration) || 1,
           duration_unit: 't',
           basis: 'stake',
-          amount: stake,
+          amount: Number(stake),
           currency: currency || session.currency || 'USD'
         };
 
-        if (barrier !== undefined && barrier !== null) {
-          parameters.barrier = String(barrier);
+        if (barrier !== undefined && barrier !== null && String(barrier).trim() !== '') {
+          parameters.barrier = String(barrier).trim();
         }
 
         ws.send(JSON.stringify({
-          buy: 1,
-          price: stake,
+          buy: "1",
+          price: Number(stake),
           parameters: parameters,
           req_id: 2
         }));
