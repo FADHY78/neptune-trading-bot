@@ -254,7 +254,8 @@ export class NeptuneBotEngine {
 
       // Execute Trade
       const symbolName = getSymbolDisplayName(symbol, derivApi.availableSymbols);
-      this.log(`PURCHASING ON ${symbol} (${symbolName}) | Contract: ${strat.contractType} | Target: ${targetDigit} | Stake: $${this.currentStake.toFixed(2)}`, 'purchasing');
+      const targetDisplay = Array.isArray(targetDigit) ? `[${targetDigit.join(', ')}]` : targetDigit;
+      this.log(`PURCHASING ON ${symbol} (${symbolName}) | Contract: ${strat.contractType} | Target: ${targetDisplay} | Stake: $${this.currentStake.toFixed(2)}${strat.bulkCount > 1 ? ` (Bulk ${strat.bulkCount}x Split)` : ''}`, 'purchasing');
       
       let result;
       if (this.config.simulationMode) {
@@ -304,27 +305,49 @@ export class NeptuneBotEngine {
   /**
    * Quantum Statistical Multi-Model Evaluator for DIGITMATCH
    * Evaluates:
-   * 1. 2-Gram & 1-Gram Markov Chain Transition Matrices
+   * 1. Order-3 (Tri-Gram), Order-2 (Di-Gram), and Order-1 (Uni-Gram) Markov Transitions
    * 2. Digit Delta / Velocity Oscillation Matrix
    * 3. Micro-Burst Volatility Clustering (last 10 ticks)
    * 4. Double-Tap / Repetition Inertia
    */
   evaluateMatchesModel(ticks, allowedDigits = [0,1,2,3,4,5,6,7,8,9]) {
     if (!Array.isArray(ticks) || ticks.length < 6) {
-      return { digit: allowedDigits[0], confidence: 10, confirmed: false, score: 0, lastDigit: '-' };
+      const fallbackList = allowedDigits.slice(0, 3);
+      return {
+        digit: allowedDigits[0],
+        rankedDigits: fallbackList,
+        rankedScores: fallbackList.map(d => ({ digit: d, score: 0.1 })),
+        confidence: 10,
+        confirmed: false,
+        score: 0,
+        lastDigit: '-'
+      };
     }
 
     const total = ticks.length;
     const last1 = ticks[total - 1];
     const last2 = ticks[total - 2];
     const last3 = ticks[total - 3];
+    const last4 = ticks[total - 4];
 
-    // Model 1: 2-Gram & 1-Gram Markov Transitions
+    // Model 1: Order-3 (Tri-Gram) Markov Transition: P(D_t | D_{t-3}, D_{t-2}, D_{t-1})
+    const markov3Counts = Array(10).fill(0);
+    let markov3Total = 0;
+    if (total >= 10 && last4 !== undefined) {
+      for (let i = 0; i < total - 3; i++) {
+        if (ticks[i] === last3 && ticks[i + 1] === last2 && ticks[i + 2] === last1) {
+          const next = ticks[i + 3];
+          if (next >= 0 && next <= 9) {
+            markov3Counts[next]++;
+            markov3Total++;
+          }
+        }
+      }
+    }
+
+    // Model 2: Order-2 (Di-Gram) Markov Transition: P(D_t | D_{t-2}, D_{t-1})
     const markov2Counts = Array(10).fill(0);
     let markov2Total = 0;
-    const markov1Counts = Array(10).fill(0);
-    let markov1Total = 0;
-
     for (let i = 0; i < total - 2; i++) {
       if (ticks[i] === last2 && ticks[i + 1] === last1) {
         const next = ticks[i + 2];
@@ -335,6 +358,9 @@ export class NeptuneBotEngine {
       }
     }
 
+    // Model 3: Order-1 (Uni-Gram) Markov Transition: P(D_t | D_{t-1})
+    const markov1Counts = Array(10).fill(0);
+    let markov1Total = 0;
     for (let i = 0; i < total - 1; i++) {
       if (ticks[i] === last1) {
         const next = ticks[i + 1];
@@ -345,10 +371,10 @@ export class NeptuneBotEngine {
       }
     }
 
-    // Model 2: Digit Delta Velocity ((D_t - D_{t-1} + 10) % 10)
+    // Model 4: Digit Delta Velocity ((D_t - D_{t-1} + 10) % 10)
     const deltaCounts = Array(10).fill(0);
     let totalDeltas = 0;
-    for (let i = Math.max(0, total - 20); i < total - 1; i++) {
+    for (let i = Math.max(0, total - 25); i < total - 1; i++) {
       const d = (ticks[i + 1] - ticks[i] + 10) % 10;
       deltaCounts[d]++;
       totalDeltas++;
@@ -363,55 +389,61 @@ export class NeptuneBotEngine {
     });
     const deltaPredictedDigit = (last1 + dominantDelta) % 10;
 
-    // Model 3: Micro-Burst Window (Last 10 ticks)
+    // Model 5: Micro-Burst Window (Last 10 ticks)
     const micro10 = ticks.slice(-10);
     const microCounts = Array(10).fill(0);
     micro10.forEach(d => { if (d >= 0 && d <= 9) microCounts[d]++; });
 
-    // Model 4: Macro Frequency
+    // Model 6: Macro Frequency (All buffer ticks)
     const macroCounts = Array(10).fill(0);
     ticks.forEach(d => { if (d >= 0 && d <= 9) macroCounts[d]++; });
 
-    // Model 5: Double-Tap Inertia
+    // Model 7: Double-Tap / Sibling Resonance
     const isDoubleTap = (last1 === last2) || (last1 === last3);
 
-    // Multi-Model Composite Scoring
-    let bestDigit = allowedDigits[0];
-    let highestScore = -1;
-
-    allowedDigits.forEach(d => {
+    // Multi-Model Composite Scoring for all allowed digits
+    const scoredList = allowedDigits.map(d => {
+      const sMarkov3 = markov3Total > 0 ? (markov3Counts[d] / markov3Total) : 0;
       const sMarkov2 = markov2Total > 0 ? (markov2Counts[d] / markov2Total) : 0;
       const sMarkov1 = markov1Total > 0 ? (markov1Counts[d] / markov1Total) : 0.1;
       const sDelta = (d === deltaPredictedDigit && totalDeltas > 0) ? (dominantDeltaCount / totalDeltas) : 0;
       const sMicro = microCounts[d] / Math.max(micro10.length, 1);
       const sMacro = macroCounts[d] / Math.max(ticks.length, 1);
-      const sRepeat = (isDoubleTap && d === last1) ? 0.15 : (micro10.slice(-3).includes(d) ? 0.05 : 0);
+      const sRepeat = (isDoubleTap && d === last1) ? 0.18 : (micro10.slice(-3).includes(d) ? 0.06 : 0);
 
       const compositeScore = 
-        (sMarkov2 * 0.35) +
-        (sMarkov1 * 0.25) +
-        (sDelta * 0.20) +
-        (sMicro * 0.15) +
-        (sMacro * 0.05) +
+        (sMarkov3 * 0.30) +
+        (sMarkov2 * 0.25) +
+        (sMarkov1 * 0.20) +
+        (sDelta * 0.15) +
+        (sMicro * 0.07) +
+        (sMacro * 0.03) +
         sRepeat;
 
-      if (compositeScore > highestScore) {
-        highestScore = compositeScore;
-        bestDigit = d;
-      }
+      return {
+        digit: d,
+        score: compositeScore
+      };
     });
 
-    const confidence = Math.min(Math.round(highestScore * 100 * 2.6), 99);
-    const hasMarkov2 = markov2Counts[bestDigit] >= 2;
-    const hasBurst = microCounts[bestDigit] >= 3;
-    const hasHighConfidence = highestScore >= 0.30;
-    const confirmed = hasMarkov2 || hasBurst || hasHighConfidence || total < 15;
+    // Sort from highest score to lowest
+    scoredList.sort((a, b) => b.score - a.score);
+
+    const best = scoredList[0];
+    const confidence = Math.min(Math.round(best.score * 100 * 2.6), 99);
+    const hasMarkov3 = markov3Counts[best.digit] >= 1;
+    const hasMarkov2 = markov2Counts[best.digit] >= 2;
+    const hasBurst = microCounts[best.digit] >= 3;
+    const hasHighConfidence = best.score >= 0.28;
+    const confirmed = hasMarkov3 || hasMarkov2 || hasBurst || hasHighConfidence || total < 15;
 
     return {
-      digit: bestDigit,
+      digit: best.digit,
+      rankedDigits: scoredList.map(s => s.digit),
+      rankedScores: scoredList,
       confidence,
       confirmed,
-      score: highestScore,
+      score: best.score,
       lastDigit: last1
     };
   }
@@ -443,96 +475,174 @@ export class NeptuneBotEngine {
 
   selectDigit(strat) {
     const digits = strat.digits || [0,1,2,3,4,5,6,7,8,9];
+    const bulkCount = Number(strat.bulkCount) || 1;
 
     if (this.config.tradingLogic === 'specific') {
       const selected = this.config.selectedDigits || [4];
+      if (bulkCount > 1) {
+        return selected.slice(0, bulkCount);
+      }
       return selected[Math.floor(Math.random() * selected.length)];
     }
 
     if (this.config.tradingLogic === 'random') {
+      if (bulkCount > 1) {
+        const shuffled = [...digits].sort(() => 0.5 - Math.random());
+        return shuffled.slice(0, bulkCount);
+      }
       return digits[Math.floor(Math.random() * digits.length)];
     }
 
-    // Analyze Mode: Statistical Frequency & Absence Analysis
+    // Analyze Mode: Quantum Multi-Model Analysis
     if (this.digitCounts.some(c => c > 0)) {
       if (strat.contractType === 'DIGITDIFF') {
-        // In Differs: We WIN when the exit digit is DIFFERENT from our target digit.
-        // Highest probability: target the COLDEST digit (lowest frequency in last 100 ticks).
-        // Tie-breaker: pick the digit absent for the longest duration (oldest last index).
-        let minCount = Infinity;
-        let candidates = [];
-        digits.forEach(d => {
-          const count = this.digitCounts[d] || 0;
-          if (count < minCount) {
-            minCount = count;
-            candidates = [d];
-          } else if (count === minCount) {
-            candidates.push(d);
-          }
+        // In Differs: target coldest digits with longest absence
+        let sortedCold = [...digits].sort((a, b) => {
+          const countA = this.digitCounts[a] || 0;
+          const countB = this.digitCounts[b] || 0;
+          if (countA !== countB) return countA - countB;
+          const idxA = this.recentTickDigits.lastIndexOf(a);
+          const idxB = this.recentTickDigits.lastIndexOf(b);
+          return idxA - idxB;
         });
 
-        if (candidates.length === 1) return candidates[0];
-
-        // Break tie by selecting digit with longest absence
-        let oldestIndex = Infinity;
-        let bestCandidate = candidates[0];
-        candidates.forEach(cand => {
-          const lastIdx = this.recentTickDigits.lastIndexOf(cand);
-          if (lastIdx < oldestIndex) {
-            oldestIndex = lastIdx;
-            bestCandidate = cand;
-          }
-        });
-        return bestCandidate;
+        if (bulkCount > 1) {
+          return sortedCold.slice(0, bulkCount);
+        }
+        return sortedCold[0];
       } else if (strat.contractType === 'DIGITMATCH') {
-        // Matches Sniper: Markov Transition & Micro-Burst Optimization
-        const sniper = this.analyzeMatchesSniper(digits);
+        // Matches Sniper & Bulk: Top quantum ranked digits
+        const sniper = this.evaluateMatchesModel(this.recentTickDigits, digits);
+        if (bulkCount > 1) {
+          return sniper.rankedDigits.slice(0, bulkCount);
+        }
         return sniper.digit;
       }
     }
 
+    if (bulkCount > 1) {
+      return digits.slice(0, bulkCount);
+    }
     return digits[Math.floor(Math.random() * digits.length)];
   }
 
   async simulateTrade(symbol, strat, targetDigit, stake) {
-    // Simulate trade ticks
-    await this.sleep(1500);
+    await this.sleep(1200);
 
     const exitDigit = Math.floor(Math.random() * 10);
-    this.recordTickDigit(exitDigit);
+    this.recordTickDigit(exitDigit, symbol);
 
+    const targets = Array.isArray(targetDigit) ? targetDigit : [targetDigit];
+    const isBulk = targets.length > 1;
     let won = false;
-    let payoutRate = (strat.payout || 9) / 100;
+    let profit = 0;
 
-    if (strat.contractType === 'DIGITDIFF') {
-      won = (exitDigit !== targetDigit);
-    } else if (strat.contractType === 'DIGITMATCH') {
-      won = (exitDigit === targetDigit);
+    if (strat.contractType === 'DIGITMATCH') {
+      won = targets.includes(exitDigit);
+      if (won) {
+        const stakePer = stake / targets.length;
+        const payout = stakePer * 8.5; // ~850% payout on winning contract
+        profit = payout - stake;
+      } else {
+        profit = -stake;
+      }
+    } else if (strat.contractType === 'DIGITDIFF') {
+      won = !targets.includes(exitDigit);
+      profit = won ? (stake * 0.09) : -stake;
     } else if (strat.contractType === 'DIGITOVER') {
       const barrier = parseInt(strat.barrier || '4', 10);
       won = (exitDigit > barrier);
+      profit = won ? (stake * 0.09) : -stake;
     } else if (strat.contractType === 'DIGITUNDER') {
       const barrier = parseInt(strat.barrier || '4', 10);
       won = (exitDigit < barrier);
-    } else {
-      won = (exitDigit !== targetDigit);
+      profit = won ? (stake * 0.09) : -stake;
     }
-
-    const profit = won ? (stake * payoutRate) : (-stake);
 
     return {
       won,
       profit,
       exitDigit,
       exitTick: `1245.${Math.floor(100 + Math.random()*800)}${exitDigit}`,
-      contractId: Math.floor(100000000 + Math.random()*900000000)
+      contractId: Math.floor(100000000 + Math.random()*900000000),
+      isBulk
     };
   }
 
   async executeLiveTrade(symbol, strat, targetDigit, stake) {
     try {
-      // Determine barrier based on strategy contract type
-      let barrier = targetDigit;
+      const targets = Array.isArray(targetDigit) ? targetDigit : [targetDigit];
+      const isBulk = targets.length > 1;
+
+      // Handle Bulk Parallel Contract Purchases
+      if (isBulk) {
+        const count = targets.length;
+        const stakePerContract = Math.max(Number((stake / count).toFixed(2)), 0.35);
+        this.log(`🚀 Executing Bulk Trade (${count} Parallel Contracts) on ${symbol} | Targets: [${targets.join(', ')}] | Stake each: $${stakePerContract.toFixed(2)}`, 'purchasing');
+
+        const buyPromises = targets.map(digit => {
+          let barrier = digit;
+          if (strat.contractType === 'DIGITOVER' || strat.contractType === 'DIGITUNDER') {
+            barrier = strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4);
+          }
+          return derivApi.buyContract({
+            symbol,
+            contractType: strat.contractType,
+            stake: stakePerContract,
+            barrier: barrier
+          });
+        });
+
+        const buyResults = await Promise.all(buyPromises);
+        const contractIds = buyResults.map(r => r.contract_id || r.contractId);
+        this.log(`Bulk contracts confirmed! IDs: [${contractIds.join(', ')}]`, 'info');
+
+        // Refresh live balance in background after contract purchase
+        derivApi.checkServerSession().catch(() => {});
+
+        // Await proposal open contract result for all contracts
+        const results = await Promise.all(buyResults.map(buyRes => {
+          if (buyRes.won !== undefined && buyRes.profit !== undefined) {
+            return Promise.resolve(buyRes);
+          }
+          const cId = buyRes.contract_id || buyRes.contractId;
+          return new Promise(resolve => {
+            const handler = (res) => {
+              if (res.contractId === cId) {
+                derivApi.off('onContractResult', handler);
+                resolve(res);
+              }
+            };
+            derivApi.on('onContractResult', handler);
+          });
+        }));
+
+        const winningContract = results.find(r => r.won);
+        const won = Boolean(winningContract);
+        const totalStakePaid = stakePerContract * count;
+        let netProfit = 0;
+
+        if (won) {
+          const winningPayout = Number(winningContract.payout) || (stakePerContract * 8.5);
+          netProfit = winningPayout - totalStakePaid;
+        } else {
+          netProfit = -totalStakePaid;
+        }
+
+        const firstResult = results[0] || {};
+        return {
+          won,
+          profit: netProfit,
+          exitDigit: firstResult.exitDigit,
+          exitTick: firstResult.exitTick,
+          contractId: contractIds.join(', '),
+          isBulk: true,
+          bulkCount: count
+        };
+      }
+
+      // Single Contract Execution
+      let barrier = targets[0];
       if (strat.contractType === 'DIGITOVER' || strat.contractType === 'DIGITUNDER') {
         barrier = strat.barrier !== undefined ? strat.barrier : (this.config.barrier !== undefined ? this.config.barrier : 4);
       }
