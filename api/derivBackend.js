@@ -913,14 +913,13 @@ export async function handleTradeBuy(req, res) {
 
       const sendBuyOrder = (currency = 'USD') => {
         const parameters = {
-          contract_type: contractType,
-          symbol: symbol,
-          underlying_symbol: symbol,
+          contract_type: String(contractType),
+          underlying_symbol: String(symbol),
           duration: Number(duration) || 1,
           duration_unit: 't',
           basis: 'stake',
           amount: Number(stake),
-          currency: currency || session.currency || 'USD'
+          currency: String(currency || session.currency || 'USD')
         };
 
         if (barrier !== undefined && barrier !== null && String(barrier).trim() !== '') {

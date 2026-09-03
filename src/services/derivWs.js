@@ -439,14 +439,13 @@ export class DerivService {
     // 1. Prioritize direct WebSocket trade execution when token is authorized
     if (this.authorized && this.token) {
       const parameters = {
-        contract_type: contractType, // 'DIGITDIFF', 'DIGITMATCH', 'DIGITOVER', 'DIGITUNDER'
-        symbol: symbol,
-        underlying_symbol: symbol,
+        contract_type: String(contractType),
+        underlying_symbol: String(symbol),
         duration: Number(duration) || 1,
-        duration_unit: 't', // ticks
+        duration_unit: 't',
         basis: 'stake',
         amount: Number(stake),
-        currency: this.currency || 'USD'
+        currency: String(this.currency || 'USD')
       };
 
       if (barrier !== undefined && barrier !== null && String(barrier).trim() !== '') {
