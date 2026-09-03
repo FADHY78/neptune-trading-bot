@@ -188,6 +188,16 @@ export class NeptuneBotEngine {
       const strat = STRATEGY_PRESETS.find(s => s.id === this.config.strategyId) || STRATEGY_PRESETS[0];
       const targetDigit = this.selectDigit(strat);
 
+      // Precision Sniper Entry Gate for DIGITMATCH
+      if (strat.contractType === 'DIGITMATCH' && this.config.tradingLogic !== 'specific') {
+        const sniper = this.analyzeMatchesSniper(strat.digits || [0,1,2,3,4,5,6,7,8,9]);
+        if (!sniper.confirmed && this.recentTickDigits.length >= 10) {
+          this.log(`🎯 Matches Sniper: Scanning ${symbol} (Current Tick: ${sniper.lastDigit}) — Awaiting momentum cluster on digit ${sniper.digit} (${sniper.confidence}% conf)...`, 'cooldown');
+          await this.sleep(1000);
+          continue;
+        }
+      }
+
       // Filters
       if (this.config.avoidLastExitDigit && targetDigit === this.lastExitDigit) {
         this.log(`Filter: Skipping target digit ${targetDigit} (matches last exit digit).`, 'cooldown');
@@ -250,6 +260,65 @@ export class NeptuneBotEngine {
     return active[this.symbolIndex % active.length];
   }
 
+  analyzeMatchesSniper(allowedDigits = [0,1,2,3,4,5,6,7,8,9]) {
+    const ticks = this.recentTickDigits;
+    const totalTicks = ticks.length;
+    if (totalTicks < 5) {
+      return { digit: allowedDigits[Math.floor(Math.random() * allowedDigits.length)], confidence: 10, confirmed: false, lastDigit: '-' };
+    }
+
+    const lastDigit = ticks[totalTicks - 1];
+
+    // 1. Markov 1-Step Transition Frequency (P(next=d | current=lastDigit))
+    const markovCounts = Array(10).fill(0);
+    let markovTotal = 0;
+    for (let i = 0; i < totalTicks - 1; i++) {
+      if (ticks[i] === lastDigit) {
+        const nextDigit = ticks[i + 1];
+        if (nextDigit >= 0 && nextDigit <= 9) {
+          markovCounts[nextDigit]++;
+          markovTotal++;
+        }
+      }
+    }
+
+    // 2. Micro-Burst Window (Last 12 ticks)
+    const microTicks = ticks.slice(-12);
+    const microCounts = Array(10).fill(0);
+    microTicks.forEach(d => {
+      if (d >= 0 && d <= 9) microCounts[d]++;
+    });
+
+    // 3. Score each allowed digit
+    let bestDigit = allowedDigits[0];
+    let highestScore = -1;
+
+    allowedDigits.forEach(d => {
+      const pMarkov = markovTotal > 0 ? (markovCounts[d] / markovTotal) : 0.1;
+      const pMicro = microTicks.length > 0 ? (microCounts[d] / microTicks.length) : 0.1;
+      const pMacro = totalTicks > 0 ? ((this.digitCounts[d] || 0) / totalTicks) : 0.1;
+
+      // Repeat / Double-Tap inertia bonus (if digit appeared in last 3 ticks)
+      const repeatBonus = microTicks.slice(-3).includes(d) ? 0.08 : 0;
+
+      // Quantitative composite score: 45% Markov transition + 35% Micro burst + 20% Macro
+      const score = (pMarkov * 0.45) + (pMicro * 0.35) + (pMacro * 0.20) + repeatBonus;
+
+      if (score > highestScore) {
+        highestScore = score;
+        bestDigit = d;
+      }
+    });
+
+    const confidence = Math.min(Math.round(highestScore * 100 * 2.2), 98);
+    // Setup is confirmed if micro burst >= 2 occurrences OR Markov transition probability >= 25%
+    const hasMicroBurst = microCounts[bestDigit] >= 2;
+    const hasMarkovDominance = markovTotal >= 2 && (markovCounts[bestDigit] / markovTotal) >= 0.25;
+    const confirmed = hasMicroBurst || hasMarkovDominance || totalTicks < 15;
+
+    return { digit: bestDigit, confidence, confirmed, lastDigit };
+  }
+
   selectDigit(strat) {
     const digits = strat.digits || [0,1,2,3,4,5,6,7,8,9];
 
@@ -294,17 +363,9 @@ export class NeptuneBotEngine {
         });
         return bestCandidate;
       } else if (strat.contractType === 'DIGITMATCH') {
-        // Matches: Target the most frequent digit (hottest)
-        let maxCount = -1;
-        let candidate = digits[0];
-        digits.forEach(d => {
-          const count = this.digitCounts[d] || 0;
-          if (count > maxCount) {
-            maxCount = count;
-            candidate = d;
-          }
-        });
-        return candidate;
+        // Matches Sniper: Markov Transition & Micro-Burst Optimization
+        const sniper = this.analyzeMatchesSniper(digits);
+        return sniper.digit;
       }
     }
 
@@ -447,12 +508,16 @@ export class NeptuneBotEngine {
 
       // Martingale Calculation
       if (this.config.useMartingale) {
-        const factor = Number(this.config.martingaleFactor) || 12;
+        let factor = Number(this.config.martingaleFactor) || 12;
+        // For DIGITMATCH (~800% payout / 8.5x), adaptive 1.3x multiplier is mathematically optimal
+        if (strat.contractType === 'DIGITMATCH') {
+          factor = Math.min(factor, 1.3);
+        }
         const maxStake = Number(this.config.maxStake) || 260;
         const nextStake = Math.min(this.currentStake * factor, maxStake);
         
         this.log(
-          `CONTRACT LOST | Loss: -$${Math.abs(profit).toFixed(2)} | Exit Digit: ${exitDigit} | Martingale: Next Stake $${nextStake.toFixed(2)}`,
+          `CONTRACT LOST | Loss: -$${Math.abs(profit).toFixed(2)} | Exit Digit: ${exitDigit} | ${strat.contractType === 'DIGITMATCH' ? 'Adaptive Recovery (8x Payout)' : 'Martingale'}: Next Stake $${nextStake.toFixed(2)}`,
           'lost'
         );
         this.currentStake = nextStake;

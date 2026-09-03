@@ -42,12 +42,12 @@ export const STRATEGY_PRESETS = [
   {
     id: 'matches-sniper-76',
     category: 'Matches Strategies',
-    name: 'Matches Sniper (Payout 76%)',
+    name: 'Matches Sniper Pro (Payout ~800% / 8.5x)',
     contractType: 'DIGITMATCH',
     digits: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    payout: 76,
+    payout: 800,
     symbolRotation: false,
-    description: 'High payout DIGITMATCH strategy predicting exact digit matches based on frequency analysis.'
+    description: 'High-reward quantitative DIGITMATCH sniper utilizing Markov transition matrices, micro-burst momentum clustering, and adaptive recovery staking.'
   },
   {
     id: 'fold-max-over',
