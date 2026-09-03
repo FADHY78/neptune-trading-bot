@@ -16,6 +16,7 @@ export const DEFAULT_CONFIG = {
   selectedDigits: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
   forceSymbolSwitch: true,
   fastExecution: true, // Millisecond Turbo Execution
+  aiPilotMode: false, // AI Auto-Pilot dynamically selects best market opportunity
   decisionInterval: 1,
   postTradeCooldown: 1,
   overUnderDirection: 'OVER', // 'OVER' or 'UNDER'

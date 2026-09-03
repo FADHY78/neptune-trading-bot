@@ -6,6 +6,7 @@ import { DigitVisualizer } from './components/DigitVisualizer.jsx';
 import { LogTerminal } from './components/LogTerminal.jsx';
 import { StrategyDocs } from './components/StrategyDocs.jsx';
 import { AboutTab } from './components/AboutTab.jsx';
+import { AiAnalyst } from './components/AiAnalyst.jsx';
 import { RiskModal } from './components/RiskModal.jsx';
 import { loadStoredConfig, saveStoredConfig, isDisclaimerAccepted, setDisclaimerAccepted } from './services/storage.js';
 import { derivApi, getDerivOAuth2Url, parseDerivOAuthParams, exchangeCodeForToken } from './services/derivWs.js';
@@ -405,6 +406,24 @@ export function App() {
             </button>
 
             <button
+              className={`btn ${activeTab === 'ai-analyst' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                borderColor: activeTab === 'ai-analyst' ? 'var(--accent-cyan)' : undefined
+              }}
+              onClick={() => setActiveTab('ai-analyst')}
+            >
+              <span>🤖 AI Market Analyst</span>
+              <span className="badge" style={{ fontSize: '9px', padding: '1px 5px', backgroundColor: 'rgba(0, 230, 118, 0.2)', color: 'var(--color-success)' }}>
+                Live
+              </span>
+            </button>
+
+            <button
               className={`btn ${activeTab === 'guidance' ? 'btn-primary' : 'btn-secondary'}`}
               style={{ padding: '6px 14px', fontSize: '12px' }}
               onClick={() => setActiveTab('guidance')}
@@ -424,6 +443,14 @@ export function App() {
           {/* Active Tab View */}
           {activeTab === 'logs' && (
             <LogTerminal logs={botState.logs} onClearLogs={() => botEngine.clearLogs()} />
+          )}
+          {activeTab === 'ai-analyst' && (
+            <AiAnalyst
+              config={config}
+              onChangeConfig={handleConfigChange}
+              onStartBot={handleStartBot}
+              isRunning={botState.running}
+            />
           )}
           {activeTab === 'guidance' && <StrategyDocs />}
           {activeTab === 'about' && <AboutTab />}

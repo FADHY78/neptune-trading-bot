@@ -739,6 +739,16 @@ export const ControlPanel = ({
         <label className="checkbox-label" style={{ marginBottom: '6px' }}>
           <input
             type="checkbox"
+            checked={Boolean(config.aiPilotMode)}
+            onChange={(e) => handleInputChange('aiPilotMode', e.target.checked)}
+            disabled={isRunning}
+          />
+          <span style={{ color: 'var(--color-success)', fontWeight: '700' }}>🤖 AI Auto-Pilot (Dynamically snipe top AI Analyst opportunities)</span>
+        </label>
+
+        <label className="checkbox-label" style={{ marginBottom: '6px' }}>
+          <input
+            type="checkbox"
             checked={config.fastExecution !== false}
             onChange={(e) => handleInputChange('fastExecution', e.target.checked)}
             disabled={isRunning}

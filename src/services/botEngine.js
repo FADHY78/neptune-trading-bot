@@ -297,8 +297,42 @@ export class NeptuneBotEngine {
 
       // Select symbol & digit
       let symbol = this.selectNextSymbol();
-      const strat = STRATEGY_PRESETS.find(s => s.id === this.config.strategyId) || STRATEGY_PRESETS[0];
+      let strat = STRATEGY_PRESETS.find(s => s.id === this.config.strategyId) || STRATEGY_PRESETS[0];
       let targetDigit = this.selectDigit(strat);
+
+      // AI Pilot Mode: Dynamically steer to the highest-probability AI opportunity
+      if (this.config?.aiPilotMode) {
+        try {
+          const { aiAnalyst } = await import('./aiAnalyst.js');
+          const aiAnalysis = aiAnalyst.analyzeMarket(this.config);
+          const topOpp = aiAnalysis?.bestOpportunity;
+          if (topOpp && topOpp.confidence >= 65) {
+            symbol = topOpp.symbol;
+            const matchingStrat = STRATEGY_PRESETS.find(s => s.id === topOpp.strategyId);
+            if (matchingStrat) {
+              strat = { ...matchingStrat };
+              if (topOpp.strategyId === 'over-under-barrier') {
+                strat.contractType = topOpp.direction === 'UNDER' ? 'DIGITUNDER' : 'DIGITOVER';
+                strat.barrier = topOpp.target;
+                targetDigit = topOpp.target;
+              } else if (topOpp.strategyId === 'even-odd-wave') {
+                strat.contractType = topOpp.contractType;
+                targetDigit = topOpp.target;
+              } else if (topOpp.strategyId === 'differs-combo-9') {
+                strat.contractType = 'DIGITDIFF';
+                targetDigit = topOpp.target;
+              } else {
+                strat.contractType = 'DIGITMATCH';
+                targetDigit = topOpp.target;
+              }
+
+              this.log(`🤖 [AI Pilot Active] Sniping Top Opportunity: ${topOpp.strategyName} on ${symbol} | Setup: ${topOpp.targetDisplay} | AI Confidence: ${topOpp.confidence}% (${topOpp.edgeRating}) 🤖`, 'won');
+            }
+          }
+        } catch (e) {
+          console.warn('AI Pilot dynamic dispatch error:', e);
+        }
+      }
 
       // Deep Tick Multi-Market Quantum Scanner
       if (strat.contractType === 'DIGITMATCH' && this.config.tradingLogic !== 'specific') {
