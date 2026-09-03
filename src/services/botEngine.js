@@ -24,6 +24,9 @@ export class NeptuneBotEngine {
     // Digit Frequency Stats (last 100 ticks)
     this.recentTickDigits = [];
     this.digitCounts = Array(10).fill(0);
+    this.symbolTickBuffers = new Map();
+    this.symbolDigitCounts = new Map();
+    this.activeSymbol = '1HZ100V';
     
     // Terminal Logs
     this.logs = [];
@@ -98,31 +101,59 @@ export class NeptuneBotEngine {
     this.log('Session metrics & trade counters reset.', 'info');
   }
 
-  recordTickDigit(digit) {
+  recordTickDigit(digit, symbol = this.activeSymbol || '1HZ100V') {
     if (typeof digit !== 'number' || isNaN(digit)) return;
+    
+    // 1. Update main recent ticks
     this.recentTickDigits.push(digit);
     if (this.recentTickDigits.length > 100) {
       this.recentTickDigits.shift();
     }
-    
-    // Recompute counts
     const counts = Array(10).fill(0);
     this.recentTickDigits.forEach(d => {
       if (d >= 0 && d <= 9) counts[d]++;
     });
     this.digitCounts = counts;
+
+    // 2. Update per-symbol buffer
+    if (symbol) {
+      if (!this.symbolTickBuffers.has(symbol)) {
+        this.symbolTickBuffers.set(symbol, []);
+      }
+      const buf = this.symbolTickBuffers.get(symbol);
+      buf.push(digit);
+      if (buf.length > 100) buf.shift();
+
+      const sCounts = Array(10).fill(0);
+      buf.forEach(d => {
+        if (d >= 0 && d <= 9) sCounts[d]++;
+      });
+      this.symbolDigitCounts.set(symbol, sCounts);
+    }
+
     this.notify();
   }
 
-  loadHistoricalDigits(digits) {
+  loadHistoricalDigits(digits, symbol = this.activeSymbol || '1HZ100V') {
     if (!Array.isArray(digits) || digits.length === 0) return;
-    this.recentTickDigits = digits.slice(-100);
+    const clean = digits.slice(-100);
+
+    if (symbol) {
+      this.symbolTickBuffers.set(symbol, clean);
+      const sCounts = Array(10).fill(0);
+      clean.forEach(d => {
+        if (typeof d === 'number' && d >= 0 && d <= 9) sCounts[d]++;
+      });
+      this.symbolDigitCounts.set(symbol, sCounts);
+    }
+
+    this.recentTickDigits = clean;
     const counts = Array(10).fill(0);
     this.recentTickDigits.forEach(d => {
       if (typeof d === 'number' && d >= 0 && d <= 9) counts[d]++;
     });
     this.digitCounts = counts;
-    this.log(`Loaded ${this.recentTickDigits.length} live market ticks for real-time digit frequency analysis.`, 'info');
+    this.log(`Loaded ${clean.length} live ticks for ${symbol || 'market'}.`, 'info');
     this.notify();
   }
 
@@ -140,7 +171,7 @@ export class NeptuneBotEngine {
     this.log(`Selected Strategy: ${strat.name}`, 'info');
     this.log(`Initial Stake: $${this.currentStake.toFixed(2)} | Take Profit: $${config.takeProfit} | Stop Loss: $${config.stopLoss}`, 'info');
 
-    // Ensure live ticks are subscribed for active symbols
+    // Ensure live ticks are subscribed for all active symbols
     if (!config.simulationMode && derivApi.connected) {
       const activeSymbols = config.activeSymbols || ['1HZ100V'];
       activeSymbols.forEach(sym => derivApi.subscribeTick(sym));
@@ -184,18 +215,28 @@ export class NeptuneBotEngine {
       }
 
       // Select symbol & digit
-      const symbol = this.selectNextSymbol();
+      let symbol = this.selectNextSymbol();
       const strat = STRATEGY_PRESETS.find(s => s.id === this.config.strategyId) || STRATEGY_PRESETS[0];
-      const targetDigit = this.selectDigit(strat);
+      let targetDigit = this.selectDigit(strat);
 
-      // Precision Sniper Entry Gate for DIGITMATCH
+      // Multi-Market Quantum Scanner for DIGITMATCH (Matches Sniper Pro)
       if (strat.contractType === 'DIGITMATCH' && this.config.tradingLogic !== 'specific') {
-        const sniper = this.analyzeMatchesSniper(strat.digits || [0,1,2,3,4,5,6,7,8,9]);
-        if (!sniper.confirmed && this.recentTickDigits.length >= 10) {
-          this.log(`🎯 Matches Sniper: Scanning ${symbol} (Current Tick: ${sniper.lastDigit}) — Awaiting momentum cluster on digit ${sniper.digit} (${sniper.confidence}% conf)...`, 'cooldown');
+        const activeSyms = this.config.activeSymbols && this.config.activeSymbols.length > 0 
+          ? this.config.activeSymbols 
+          : ['1HZ100V', '1HZ75V', '1HZ50V', '1HZ25V', '1HZ10V'];
+
+        const bestOpp = this.scanAllSymbolsForBestMatch(activeSyms, strat.digits || [0,1,2,3,4,5,6,7,8,9]);
+
+        if (!bestOpp.confirmed && this.recentTickDigits.length >= 10) {
+          const symName = getSymbolDisplayName(bestOpp.symbol, derivApi.availableSymbols);
+          this.log(`🎯 Matches Quantum Radar: Scanning [${activeSyms.length} markets] — Best setup: ${symName} digit ${bestOpp.digit} (${bestOpp.confidence}% conf). Awaiting confluence trigger...`, 'cooldown');
           await this.sleep(1000);
           continue;
         }
+
+        // Lock in the highest probability market & digit
+        symbol = bestOpp.symbol;
+        targetDigit = bestOpp.digit;
       }
 
       // Filters
@@ -247,7 +288,7 @@ export class NeptuneBotEngine {
       }
 
       // Symbol rotation
-      if (this.config.forceSymbolSwitch) {
+      if (this.config.forceSymbolSwitch && strat.contractType !== 'DIGITMATCH') {
         this.symbolIndex = (this.symbolIndex + 1) % (this.config.activeSymbols?.length || 1);
       }
     }
@@ -260,63 +301,144 @@ export class NeptuneBotEngine {
     return active[this.symbolIndex % active.length];
   }
 
-  analyzeMatchesSniper(allowedDigits = [0,1,2,3,4,5,6,7,8,9]) {
-    const ticks = this.recentTickDigits;
-    const totalTicks = ticks.length;
-    if (totalTicks < 5) {
-      return { digit: allowedDigits[Math.floor(Math.random() * allowedDigits.length)], confidence: 10, confirmed: false, lastDigit: '-' };
+  /**
+   * Quantum Statistical Multi-Model Evaluator for DIGITMATCH
+   * Evaluates:
+   * 1. 2-Gram & 1-Gram Markov Chain Transition Matrices
+   * 2. Digit Delta / Velocity Oscillation Matrix
+   * 3. Micro-Burst Volatility Clustering (last 10 ticks)
+   * 4. Double-Tap / Repetition Inertia
+   */
+  evaluateMatchesModel(ticks, allowedDigits = [0,1,2,3,4,5,6,7,8,9]) {
+    if (!Array.isArray(ticks) || ticks.length < 6) {
+      return { digit: allowedDigits[0], confidence: 10, confirmed: false, score: 0, lastDigit: '-' };
     }
 
-    const lastDigit = ticks[totalTicks - 1];
+    const total = ticks.length;
+    const last1 = ticks[total - 1];
+    const last2 = ticks[total - 2];
+    const last3 = ticks[total - 3];
 
-    // 1. Markov 1-Step Transition Frequency (P(next=d | current=lastDigit))
-    const markovCounts = Array(10).fill(0);
-    let markovTotal = 0;
-    for (let i = 0; i < totalTicks - 1; i++) {
-      if (ticks[i] === lastDigit) {
-        const nextDigit = ticks[i + 1];
-        if (nextDigit >= 0 && nextDigit <= 9) {
-          markovCounts[nextDigit]++;
-          markovTotal++;
+    // Model 1: 2-Gram & 1-Gram Markov Transitions
+    const markov2Counts = Array(10).fill(0);
+    let markov2Total = 0;
+    const markov1Counts = Array(10).fill(0);
+    let markov1Total = 0;
+
+    for (let i = 0; i < total - 2; i++) {
+      if (ticks[i] === last2 && ticks[i + 1] === last1) {
+        const next = ticks[i + 2];
+        if (next >= 0 && next <= 9) {
+          markov2Counts[next]++;
+          markov2Total++;
         }
       }
     }
 
-    // 2. Micro-Burst Window (Last 12 ticks)
-    const microTicks = ticks.slice(-12);
-    const microCounts = Array(10).fill(0);
-    microTicks.forEach(d => {
-      if (d >= 0 && d <= 9) microCounts[d]++;
-    });
+    for (let i = 0; i < total - 1; i++) {
+      if (ticks[i] === last1) {
+        const next = ticks[i + 1];
+        if (next >= 0 && next <= 9) {
+          markov1Counts[next]++;
+          markov1Total++;
+        }
+      }
+    }
 
-    // 3. Score each allowed digit
+    // Model 2: Digit Delta Velocity ((D_t - D_{t-1} + 10) % 10)
+    const deltaCounts = Array(10).fill(0);
+    let totalDeltas = 0;
+    for (let i = Math.max(0, total - 20); i < total - 1; i++) {
+      const d = (ticks[i + 1] - ticks[i] + 10) % 10;
+      deltaCounts[d]++;
+      totalDeltas++;
+    }
+    let dominantDelta = 0;
+    let dominantDeltaCount = -1;
+    deltaCounts.forEach((c, delta) => {
+      if (c > dominantDeltaCount) {
+        dominantDeltaCount = c;
+        dominantDelta = delta;
+      }
+    });
+    const deltaPredictedDigit = (last1 + dominantDelta) % 10;
+
+    // Model 3: Micro-Burst Window (Last 10 ticks)
+    const micro10 = ticks.slice(-10);
+    const microCounts = Array(10).fill(0);
+    micro10.forEach(d => { if (d >= 0 && d <= 9) microCounts[d]++; });
+
+    // Model 4: Macro Frequency
+    const macroCounts = Array(10).fill(0);
+    ticks.forEach(d => { if (d >= 0 && d <= 9) macroCounts[d]++; });
+
+    // Model 5: Double-Tap Inertia
+    const isDoubleTap = (last1 === last2) || (last1 === last3);
+
+    // Multi-Model Composite Scoring
     let bestDigit = allowedDigits[0];
     let highestScore = -1;
 
     allowedDigits.forEach(d => {
-      const pMarkov = markovTotal > 0 ? (markovCounts[d] / markovTotal) : 0.1;
-      const pMicro = microTicks.length > 0 ? (microCounts[d] / microTicks.length) : 0.1;
-      const pMacro = totalTicks > 0 ? ((this.digitCounts[d] || 0) / totalTicks) : 0.1;
+      const sMarkov2 = markov2Total > 0 ? (markov2Counts[d] / markov2Total) : 0;
+      const sMarkov1 = markov1Total > 0 ? (markov1Counts[d] / markov1Total) : 0.1;
+      const sDelta = (d === deltaPredictedDigit && totalDeltas > 0) ? (dominantDeltaCount / totalDeltas) : 0;
+      const sMicro = microCounts[d] / Math.max(micro10.length, 1);
+      const sMacro = macroCounts[d] / Math.max(ticks.length, 1);
+      const sRepeat = (isDoubleTap && d === last1) ? 0.15 : (micro10.slice(-3).includes(d) ? 0.05 : 0);
 
-      // Repeat / Double-Tap inertia bonus (if digit appeared in last 3 ticks)
-      const repeatBonus = microTicks.slice(-3).includes(d) ? 0.08 : 0;
+      const compositeScore = 
+        (sMarkov2 * 0.35) +
+        (sMarkov1 * 0.25) +
+        (sDelta * 0.20) +
+        (sMicro * 0.15) +
+        (sMacro * 0.05) +
+        sRepeat;
 
-      // Quantitative composite score: 45% Markov transition + 35% Micro burst + 20% Macro
-      const score = (pMarkov * 0.45) + (pMicro * 0.35) + (pMacro * 0.20) + repeatBonus;
-
-      if (score > highestScore) {
-        highestScore = score;
+      if (compositeScore > highestScore) {
+        highestScore = compositeScore;
         bestDigit = d;
       }
     });
 
-    const confidence = Math.min(Math.round(highestScore * 100 * 2.2), 98);
-    // Setup is confirmed if micro burst >= 2 occurrences OR Markov transition probability >= 25%
-    const hasMicroBurst = microCounts[bestDigit] >= 2;
-    const hasMarkovDominance = markovTotal >= 2 && (markovCounts[bestDigit] / markovTotal) >= 0.25;
-    const confirmed = hasMicroBurst || hasMarkovDominance || totalTicks < 15;
+    const confidence = Math.min(Math.round(highestScore * 100 * 2.6), 99);
+    const hasMarkov2 = markov2Counts[bestDigit] >= 2;
+    const hasBurst = microCounts[bestDigit] >= 3;
+    const hasHighConfidence = highestScore >= 0.30;
+    const confirmed = hasMarkov2 || hasBurst || hasHighConfidence || total < 15;
 
-    return { digit: bestDigit, confidence, confirmed, lastDigit };
+    return {
+      digit: bestDigit,
+      confidence,
+      confirmed,
+      score: highestScore,
+      lastDigit: last1
+    };
+  }
+
+  scanAllSymbolsForBestMatch(activeSymbols, stratDigits) {
+    let bestCandidate = null;
+
+    activeSymbols.forEach(sym => {
+      const ticks = this.symbolTickBuffers.get(sym) || (sym === this.activeSymbol ? this.recentTickDigits : []);
+      if (ticks.length >= 6) {
+        const evalRes = this.evaluateMatchesModel(ticks, stratDigits);
+        if (!bestCandidate || evalRes.score > bestCandidate.score) {
+          bestCandidate = {
+            symbol: sym,
+            ...evalRes
+          };
+        }
+      }
+    });
+
+    if (!bestCandidate) {
+      const fallbackSym = activeSymbols[0] || '1HZ100V';
+      const evalRes = this.evaluateMatchesModel(this.recentTickDigits, stratDigits);
+      return { symbol: fallbackSym, ...evalRes };
+    }
+
+    return bestCandidate;
   }
 
   selectDigit(strat) {

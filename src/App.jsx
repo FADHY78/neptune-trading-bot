@@ -219,13 +219,13 @@ export function App() {
 
     const onTick = (tickData) => {
       if (tickData && tickData.lastDigit !== undefined) {
-        botEngine.recordTickDigit(tickData.lastDigit);
+        botEngine.recordTickDigit(tickData.lastDigit, tickData.symbol);
       }
     };
 
     const onHist = (histData) => {
       if (histData && Array.isArray(histData.digits)) {
-        botEngine.loadHistoricalDigits(histData.digits);
+        botEngine.loadHistoricalDigits(histData.digits, histData.symbol);
       }
     };
 
@@ -235,10 +235,10 @@ export function App() {
     derivApi.on('onTick', onTick);
     derivApi.on('onTickHistory', onHist);
 
-    // Immediately connect public feed to start streaming live market data & tick history
+    // Immediately connect public feed to start streaming live market data & tick history across all active symbols
     derivApi.connectPublicWs().then(() => {
-      const activeSym = config?.activeSymbols?.[0] || '1HZ100V';
-      derivApi.subscribeTick(activeSym);
+      const symbolsToStream = config?.activeSymbols?.length > 0 ? config.activeSymbols : ['1HZ100V', '1HZ75V', '1HZ50V', '1HZ25V', '1HZ10V'];
+      symbolsToStream.forEach(sym => derivApi.subscribeTick(sym));
     }).catch(() => {});
 
     return () => {
