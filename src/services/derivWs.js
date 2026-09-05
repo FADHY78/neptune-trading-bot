@@ -420,6 +420,17 @@ export class DerivService {
     }
   }
 
+  async forgetAllTicks() {
+    try {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        await this.send({ forget_all: 'ticks' }).catch(() => {});
+      }
+      this.activeSubscriptions.clear();
+    } catch (e) {
+      console.warn('Error clearing tick subscriptions:', e);
+    }
+  }
+
   async subscribeTick(symbol) {
     try {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {

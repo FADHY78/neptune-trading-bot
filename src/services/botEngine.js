@@ -26,7 +26,10 @@ export class NeptuneBotEngine {
     this.digitCounts = Array(10).fill(0);
     this.symbolTickBuffers = new Map();
     this.symbolDigitCounts = new Map();
-    this.activeSymbol = '1HZ100V';
+    this.symbolRichTicks = new Map();
+    this.lastQuoteBySymbol = new Map();
+    this.lastTickTimeBySymbol = new Map();
+    this.activeSymbol = '1HZ10V';
     
     // Terminal Logs
     this.logs = [];
@@ -48,7 +51,42 @@ export class NeptuneBotEngine {
     });
   }
 
-  getState() {
+  getState(symbol = this.activeSymbol) {
+    const targetSymbol = symbol || this.activeSymbol || '1HZ10V';
+    const symTicks = this.symbolTickBuffers?.get(targetSymbol) || this.recentTickDigits || [];
+    const symCounts = this.symbolDigitCounts?.get(targetSymbol) || this.digitCounts || Array(10).fill(0);
+    const richList = this.symbolRichTicks?.get(targetSymbol) || [];
+    const lastRich = richList.length > 0 ? richList[richList.length - 1] : null;
+
+    const total = symCounts.reduce((a, b) => a + b, 0);
+    const evens = [0, 2, 4, 6, 8].reduce((acc, d) => acc + (symCounts[d] || 0), 0);
+    const evenPct = total > 0 ? Math.round((evens / total) * 100) : 44;
+    const oddPct = total > 0 ? 100 - evenPct : 56;
+
+    // Per-symbol live price
+    const symPrice = lastRich?.quote 
+      ? lastRich.quote 
+      : (this.lastQuoteBySymbol?.get(targetSymbol) || (this.activeSymbol === targetSymbol ? this.lastQuote : null) || 20.49460);
+
+    // Per-symbol current digit
+    const symDigit = lastRich?.lastDigit !== undefined
+      ? lastRich.lastDigit
+      : (symTicks.length > 0 ? symTicks[symTicks.length - 1] : (this.lastTickDigit !== undefined ? this.lastTickDigit : 4));
+
+    // Per-symbol last update time
+    const symUpdate = this.lastTickTimeBySymbol?.get(targetSymbol) || this.lastTickTime || new Date().toLocaleTimeString('en-GB');
+
+    // Per-symbol total ticks
+    const symTotalTicks = symTicks.length > 0 ? symTicks.length : (this.totalTicksReceived || 214);
+
+    // Dynamic volatility calculation based on price movement
+    let symVolatility = 1.2;
+    if (richList.length >= 5) {
+      const deltas = richList.slice(-15).map(r => Math.abs(r.priceDelta || 0));
+      const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+      symVolatility = Math.max(0.4, Number((avgDelta * 10 + 0.8).toFixed(1)));
+    }
+
     return {
       running: this.running,
       paused: this.paused,
@@ -60,27 +98,18 @@ export class NeptuneBotEngine {
       currentStreak: this.currentStreak,
       currentStake: this.currentStake,
       lastExitDigit: this.lastExitDigit,
-      digitCounts: [...this.digitCounts],
+      digitCounts: [...symCounts],
       logs: [...this.logs],
       isGoldenStrike: this.tradeCount < 10,
       goldenRunsCompleted: Math.min(this.tradeCount, 10),
-      currentDigit: this.lastTickDigit !== undefined && this.lastTickDigit !== null ? this.lastTickDigit : (this.recentTickDigits.length > 0 ? this.recentTickDigits[this.recentTickDigits.length - 1] : 4),
-      livePrice: this.lastQuote || 20.49460,
-      totalTicks: this.totalTicksReceived || (this.recentTickDigits.length > 0 ? this.recentTickDigits.length : 214),
-      lastUpdate: this.lastTickTime || new Date().toLocaleTimeString('en-GB'),
-      evenPercentage: (() => {
-        const total = this.digitCounts.reduce((a, b) => a + b, 0);
-        if (total === 0) return 44;
-        const evens = [0, 2, 4, 6, 8].reduce((acc, d) => acc + (this.digitCounts[d] || 0), 0);
-        return Math.round((evens / total) * 100);
-      })(),
-      oddPercentage: (() => {
-        const total = this.digitCounts.reduce((a, b) => a + b, 0);
-        if (total === 0) return 56;
-        const evens = [0, 2, 4, 6, 8].reduce((acc, d) => acc + (this.digitCounts[d] || 0), 0);
-        return 100 - Math.round((evens / total) * 100);
-      })(),
-      volatility: this.calculatedVolatility || 1.2
+      currentDigit: symDigit,
+      livePrice: symPrice,
+      totalTicks: symTotalTicks,
+      lastUpdate: symUpdate,
+      evenPercentage: evenPct,
+      oddPercentage: oddPct,
+      volatility: symVolatility,
+      activeSymbol: targetSymbol
     };
   }
 
@@ -125,12 +154,25 @@ export class NeptuneBotEngine {
     if (typeof digit !== 'number' || isNaN(digit)) return;
     
     // 1. Update main recent ticks
-    this.lastTickDigit = digit;
-    if (quote && Number(quote) > 0) {
-      this.lastQuote = Number(quote);
+    const numQuote = Number(quote) || 0;
+    const nowTime = new Date().toLocaleTimeString('en-GB');
+
+    if (symbol) {
+      if (!this.lastQuoteBySymbol) this.lastQuoteBySymbol = new Map();
+      if (!this.lastTickTimeBySymbol) this.lastTickTimeBySymbol = new Map();
+      if (numQuote > 0) this.lastQuoteBySymbol.set(symbol, numQuote);
+      this.lastTickTimeBySymbol.set(symbol, nowTime);
     }
+
+    if (symbol === this.activeSymbol || !this.activeSymbol) {
+      this.lastTickDigit = digit;
+      if (numQuote > 0) {
+        this.lastQuote = numQuote;
+      }
+      this.lastTickTime = nowTime;
+    }
+
     this.totalTicksReceived = (this.totalTicksReceived || 214) + 1;
-    this.lastTickTime = new Date().toLocaleTimeString('en-GB');
 
     this.recentTickDigits.push(digit);
     if (this.recentTickDigits.length > 100) {
@@ -247,6 +289,19 @@ export class NeptuneBotEngine {
         });
       }
       this.symbolRichTicks.set(symbol, richList);
+
+      // Store latest historical price for symbol
+      if (cleanPrices.length > 0) {
+        const latestPrice = cleanPrices[cleanPrices.length - 1];
+        if (latestPrice > 0) {
+          if (!this.lastQuoteBySymbol) this.lastQuoteBySymbol = new Map();
+          this.lastQuoteBySymbol.set(symbol, latestPrice);
+          if (symbol === this.activeSymbol) {
+            this.lastQuote = latestPrice;
+            this.lastTickDigit = clean[clean.length - 1];
+          }
+        }
+      }
     }
 
     this.recentTickDigits = clean;

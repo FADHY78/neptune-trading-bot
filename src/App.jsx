@@ -55,19 +55,26 @@ export function App() {
   }, [theme]);
 
   // Save config on change & subscribe to new symbol
-  const handleConfigChange = (newConfig) => {
+  const handleConfigChange = async (newConfig) => {
     setConfig(newConfig);
     saveStoredConfig(newConfig);
 
     const activeSym = newConfig?.activeSymbols?.[0] || '1HZ10V';
-    botEngine.activeSymbol = activeSym;
-    derivApi.subscribeTick(activeSym);
+    if (botEngine.activeSymbol !== activeSym) {
+      botEngine.activeSymbol = activeSym;
+      const symName = getSymbolDisplayName(activeSym);
+      botEngine.log(`📡 Switching to ${symName} (${activeSym})... Subscribing to live Deriv ticks...`, 'info');
 
-    const symName = getSymbolDisplayName(activeSym);
-    botEngine.log(`📡 Switched to ${symName} (${activeSym}) — subscribing to live Deriv ticks...`, 'info');
+      // Clear previous tick subscriptions and subscribe to selected symbol
+      await derivApi.forgetAllTicks();
+      await derivApi.subscribeTick(activeSym);
 
-    // Trigger AI analysis for the new symbol
-    aiAnalyst.analyzeMarket(newConfig);
+      // Force immediate re-render with target symbol's state
+      setBotState(botEngine.getState(activeSym));
+
+      // Trigger AI analysis for the new symbol
+      aiAnalyst.analyzeMarket(newConfig);
+    }
   };
 
   // Deriv OAuth 2.0 & Token URL Checks
