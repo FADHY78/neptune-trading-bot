@@ -437,12 +437,13 @@ export class DerivService {
         await this.connectPublicWs();
       }
 
-      // 1. Fetch historical ticks to pre-populate frequency visualizer immediately
+      // 1. Fetch historical ticks using exact Deriv API schema
       this.send({
         ticks_history: symbol,
         adjust_start_time: 1,
-        count: 100,
+        count: 214,
         end: 'latest',
+        start: 1,
         style: 'ticks'
       }).catch(() => {});
 
@@ -591,30 +592,36 @@ export class DerivService {
       case 'tick':
         if (data.tick) {
           const rawQuote = data.tick.quote;
-          const displayValue = data.tick.display_value || String(rawQuote);
+          const pipSize = data.tick.pip_size !== undefined ? Number(data.tick.pip_size) : 4;
+          const displayValue = data.tick.display_value || (typeof rawQuote === 'number' ? rawQuote.toFixed(pipSize) : String(rawQuote));
           const lastDigit = parseInt(displayValue.slice(-1), 10);
           
           this.emit('onTick', {
             symbol: data.tick.symbol,
             quote: rawQuote,
             displayValue,
-            lastDigit,
-            epoch: data.tick.epoch
+            lastDigit: isNaN(lastDigit) ? 0 : lastDigit,
+            pipSize,
+            epoch: data.tick.epoch,
+            bid: data.tick.bid,
+            ask: data.tick.ask
           });
         }
         break;
 
       case 'history':
         if (data.history && Array.isArray(data.history.prices)) {
+          const pipSize = data.pip_size !== undefined ? Number(data.pip_size) : (data.history.pip_size !== undefined ? Number(data.history.pip_size) : 4);
           const digits = data.history.prices.map(p => {
-            const str = String(p);
+            const str = typeof p === 'number' ? p.toFixed(pipSize) : String(p);
             return parseInt(str.slice(-1), 10);
           }).filter(d => !isNaN(d));
 
           this.emit('onTickHistory', {
             symbol: data.echo_req?.ticks_history,
             digits,
-            prices: data.history.prices
+            prices: data.history.prices,
+            pipSize
           });
         }
         break;

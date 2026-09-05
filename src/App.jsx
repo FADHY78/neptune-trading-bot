@@ -239,16 +239,27 @@ export function App() {
 
     const onTick = (tickData) => {
       if (tickData && tickData.lastDigit !== undefined) {
-        botEngine.recordTickDigit(tickData.lastDigit, tickData.symbol, tickData.quote);
+        botEngine.recordTickDigit(
+          tickData.lastDigit, 
+          tickData.symbol, 
+          tickData.quote, 
+          tickData.displayValue, 
+          tickData.pipSize
+        );
         // Force botState update to guarantee immediate component re-render
-        setBotState(botEngine.getState());
+        setBotState(botEngine.getState(config?.activeSymbols?.[0]));
       }
     };
 
     const onHist = (histData) => {
       if (histData && Array.isArray(histData.digits)) {
-        botEngine.loadHistoricalDigits(histData.digits, histData.symbol, histData.prices || []);
-        setBotState(botEngine.getState());
+        botEngine.loadHistoricalDigits(
+          histData.digits, 
+          histData.symbol, 
+          histData.prices || [], 
+          histData.pipSize
+        );
+        setBotState(botEngine.getState(config?.activeSymbols?.[0]));
       }
     };
 

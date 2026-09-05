@@ -63,10 +63,12 @@ export class NeptuneBotEngine {
     const evenPct = total > 0 ? Math.round((evens / total) * 100) : 44;
     const oddPct = total > 0 ? 100 - evenPct : 56;
 
-    // Per-symbol live price
-    const symPrice = lastRich?.quote 
+    // Per-symbol live price (with exact Deriv pip_size decimal formatting)
+    const pip = this.pipSizeBySymbol?.get(targetSymbol) || 5;
+    const rawPrice = lastRich?.quote 
       ? lastRich.quote 
       : (this.lastQuoteBySymbol?.get(targetSymbol) || (this.activeSymbol === targetSymbol ? this.lastQuote : null) || 20.49460);
+    const symPrice = this.lastDisplayQuoteBySymbol?.get(targetSymbol) || (typeof rawPrice === 'number' ? rawPrice.toFixed(pip) : String(rawPrice));
 
     // Per-symbol current digit
     const symDigit = lastRich?.lastDigit !== undefined
@@ -76,8 +78,8 @@ export class NeptuneBotEngine {
     // Per-symbol last update time
     const symUpdate = this.lastTickTimeBySymbol?.get(targetSymbol) || this.lastTickTime || new Date().toLocaleTimeString('en-GB');
 
-    // Per-symbol total ticks
-    const symTotalTicks = symTicks.length > 0 ? symTicks.length : (this.totalTicksReceived || 214);
+    // Per-symbol total ticks (tracks collected ticks lively)
+    const symTotalTicks = this.totalTicksBySymbol?.get(targetSymbol) || (symTicks.length > 0 ? symTicks.length : (this.totalTicksReceived || 214));
 
     // Dynamic volatility calculation based on price movement
     let symVolatility = 1.2;
@@ -150,7 +152,7 @@ export class NeptuneBotEngine {
     this.log('Session metrics & trade counters reset.', 'info');
   }
 
-  recordTickDigit(digit, symbol = this.activeSymbol || '1HZ100V', quote = 0) {
+  recordTickDigit(digit, symbol = this.activeSymbol || '1HZ100V', quote = 0, displayValue = '', pipSize = 4) {
     if (typeof digit !== 'number' || isNaN(digit)) return;
     
     // 1. Update main recent ticks
@@ -159,9 +161,22 @@ export class NeptuneBotEngine {
 
     if (symbol) {
       if (!this.lastQuoteBySymbol) this.lastQuoteBySymbol = new Map();
+      if (!this.lastDisplayQuoteBySymbol) this.lastDisplayQuoteBySymbol = new Map();
       if (!this.lastTickTimeBySymbol) this.lastTickTimeBySymbol = new Map();
+      if (!this.pipSizeBySymbol) this.pipSizeBySymbol = new Map();
+      if (!this.totalTicksBySymbol) this.totalTicksBySymbol = new Map();
+
       if (numQuote > 0) this.lastQuoteBySymbol.set(symbol, numQuote);
+      if (pipSize) this.pipSizeBySymbol.set(symbol, pipSize);
+      
+      const pip = this.pipSizeBySymbol.get(symbol) || pipSize || 5;
+      const formattedDisplay = displayValue || (typeof numQuote === 'number' && numQuote > 0 ? numQuote.toFixed(pip) : String(numQuote));
+      if (formattedDisplay) this.lastDisplayQuoteBySymbol.set(symbol, formattedDisplay);
+
       this.lastTickTimeBySymbol.set(symbol, nowTime);
+
+      const symTicksCount = (this.totalTicksBySymbol.get(symbol) || 214) + 1;
+      this.totalTicksBySymbol.set(symbol, symTicksCount);
     }
 
     if (symbol === this.activeSymbol || !this.activeSymbol) {
@@ -208,7 +223,6 @@ export class NeptuneBotEngine {
       }
       const richList = this.symbolRichTicks.get(symbol);
       const prevTick = richList.length > 0 ? richList[richList.length - 1] : null;
-      const numQuote = Number(quote) || 0;
       const priceDelta = prevTick && numQuote > 0 ? numQuote - prevTick.quote : 0;
       const direction = priceDelta > 0 ? 'UP' : (priceDelta < 0 ? 'DOWN' : 'FLAT');
 
@@ -259,12 +273,19 @@ export class NeptuneBotEngine {
     });
   }
 
-  loadHistoricalDigits(digits, symbol = this.activeSymbol || '1HZ100V', prices = []) {
+  loadHistoricalDigits(digits, symbol = this.activeSymbol || '1HZ100V', prices = [], pipSize = 4) {
     if (!Array.isArray(digits) || digits.length === 0) return;
     const clean = digits.slice(-100);
 
     if (symbol) {
+      if (!this.symbolTickBuffers) this.symbolTickBuffers = new Map();
+      if (!this.pipSizeBySymbol) this.pipSizeBySymbol = new Map();
+      if (!this.totalTicksBySymbol) this.totalTicksBySymbol = new Map();
+
       this.symbolTickBuffers.set(symbol, clean);
+      if (pipSize) this.pipSizeBySymbol.set(symbol, pipSize);
+      this.totalTicksBySymbol.set(symbol, Math.max(digits.length, 214));
+
       const sCounts = Array(10).fill(0);
       clean.forEach(d => {
         if (typeof d === 'number' && d >= 0 && d <= 9) sCounts[d]++;
@@ -295,7 +316,12 @@ export class NeptuneBotEngine {
         const latestPrice = cleanPrices[cleanPrices.length - 1];
         if (latestPrice > 0) {
           if (!this.lastQuoteBySymbol) this.lastQuoteBySymbol = new Map();
+          if (!this.lastDisplayQuoteBySymbol) this.lastDisplayQuoteBySymbol = new Map();
+
           this.lastQuoteBySymbol.set(symbol, latestPrice);
+          const pip = this.pipSizeBySymbol.get(symbol) || pipSize || 5;
+          this.lastDisplayQuoteBySymbol.set(symbol, typeof latestPrice === 'number' ? latestPrice.toFixed(pip) : String(latestPrice));
+
           if (symbol === this.activeSymbol) {
             this.lastQuote = latestPrice;
             this.lastTickDigit = clean[clean.length - 1];
