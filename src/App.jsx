@@ -59,7 +59,9 @@ export function App() {
     setConfig(newConfig);
     saveStoredConfig(newConfig);
 
-    const activeSym = newConfig?.activeSymbols?.[0] || '1HZ10V';
+    // Fall back to the first confirmed-valid symbol from Deriv's active_symbols list
+    const fallback = derivApi.availableSymbols?.[0]?.symbol || 'R_100';
+    const activeSym = newConfig?.activeSymbols?.[0] || fallback;
     if (botEngine.activeSymbol !== activeSym) {
       botEngine.activeSymbol = activeSym;
       const symName = getSymbolDisplayName(activeSym);
@@ -76,6 +78,7 @@ export function App() {
       aiAnalyst.analyzeMarket(newConfig);
     }
   };
+
 
   // Deriv OAuth 2.0 & Token URL Checks
   useEffect(() => {
@@ -268,34 +271,36 @@ export function App() {
       }
     };
 
-    derivApi.on('onAuthorize', onAuth);
-    derivApi.on('onBalance', onBal);
-    derivApi.on('onSymbols', onSyms);
-    derivApi.on('onTick', onTick);
-    derivApi.on('onTickHistory', onHist);
-
-    // Connect to Deriv public WebSocket feed immediately
-    derivApi.connectPublicWs().then(() => {
-      setWsState(prev => ({ ...prev, connected: true }));
-      const active = config?.activeSymbols?.[0] || '1HZ10V';
+    // When the active_symbols list is loaded, subscribe to the selected symbol
+    // This guarantees we only subscribe to symbols Deriv confirms as valid for this app_id
+    const onSymsWithSubscribe = (symbols) => {
+      onSyms(symbols);
+      // Only subscribe to the user's selected symbol — no bulk preloading
+      const active = config?.activeSymbols?.[0] || (symbols[0]?.symbol) || 'R_100';
       botEngine.activeSymbol = active;
       derivApi.subscribeTick(active);
+    };
 
-      // Preload major 1s indices so data is readily accessible
-      ['1HZ10V', '1HZ100V', '1HZ50V', '1HZ75V', '1HZ25V'].forEach(sym => {
-        derivApi.subscribeTick(sym);
-      });
+    // Start the public WebSocket connection — subscriptions are queued until onopen fires
+    derivApi.connectPublicWs().then(() => {
+      setWsState(prev => ({ ...prev, connected: true }));
     }).catch((err) => {
       console.warn('Public Deriv WS notice:', err);
-      // If WebSocket cannot connect immediately, seed initial ticks so UI works seamlessly
       botEngine.seedHistoricalTicks(60);
       setBotState(botEngine.getState());
     });
 
+    derivApi.on('onAuthorize', onAuth);
+    derivApi.on('onBalance', onBal);
+    derivApi.on('onSymbols', onSymsWithSubscribe);
+    derivApi.on('onTick', onTick);
+    derivApi.on('onTickHistory', onHist);
+
+
     return () => {
       derivApi.off('onAuthorize', onAuth);
       derivApi.off('onBalance', onBal);
-      derivApi.off('onSymbols', onSyms);
+      derivApi.off('onSymbols', onSymsWithSubscribe);
       derivApi.off('onTick', onTick);
       derivApi.off('onTickHistory', onHist);
     };

@@ -108,24 +108,62 @@ export class DerivService {
   }
 
   /**
-   * Connect browser to Deriv WebSocket for zero-latency public market feed (ticks, active symbols)
+   * Connect browser to Deriv WebSocket for zero-latency public market feed.
+   * Returns a promise that resolves once the socket is open.
+   * Concurrent callers all share the same connection attempt.
    */
   connectPublicWs() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+    // Already open — nothing to do
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return Promise.resolve();
     }
 
-    return new Promise((resolve) => {
+    // Already connecting — share the same promise
+    if (this._connectionPromise) {
+      return this._connectionPromise;
+    }
+
+    this._connectionPromise = new Promise((resolve, reject) => {
       const url = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
       this.ws = new WebSocket(url);
 
-      this.ws.onopen = () => {
+      const onOpen = () => {
         this.connected = true;
+        this._connectionPromise = null;
         this.emit('onConnect', { appId: '1089', publicFeed: true });
-        this.fetchActiveSymbols();
+
+        // Fetch active symbols so we can validate subscriptions
+        this.fetchActiveSymbols().then(() => {
+          // Replay any subscriptions that were queued before connection was ready
+          const queued = this._pendingSubscriptions || [];
+          this._pendingSubscriptions = [];
+          queued.forEach(sym => this.subscribeTick(sym));
+        });
+
         resolve();
       };
 
+      const onClose = () => {
+        this.connected = false;
+        this._connectionPromise = null;
+        // Auto-reconnect after 3 s and re-subscribe to the active symbol
+        setTimeout(() => {
+          this.connectPublicWs().then(() => {
+            const sym = this._lastSubscribedSymbol;
+            if (sym) this.subscribeTick(sym);
+          });
+        }, 3000);
+      };
+
+      const onError = (err) => {
+        console.warn('Public Deriv WS feed notice:', err);
+        this._connectionPromise = null;
+        reject(err);
+      };
+
+      this.ws.onopen = onOpen;
+      this.ws.onclose = onClose;
+      this.ws.onerror = onError;
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -134,17 +172,9 @@ export class DerivService {
           console.error('Error handling Deriv WS message:', e);
         }
       };
-
-      this.ws.onclose = () => {
-        if (this.isServerSession) {
-          setTimeout(() => this.connectPublicWs(), 3000);
-        }
-      };
-
-      this.ws.onerror = (err) => {
-        console.warn('Public Deriv WS feed notice:', err);
-      };
     });
+
+    return this._connectionPromise;
   }
 
   /**
@@ -178,10 +208,8 @@ export class DerivService {
         });
 
         // Connect public WebSocket for real-time market ticks & active symbols
+        // The onSymbols event will trigger initial tick subscription once symbols are validated
         await this.connectPublicWs();
-
-        // Subscribe to initial active symbol ticks
-        this.subscribeTick('1HZ100V');
 
         return { authenticated: true, activeAccount: data.activeAccount, accounts: data.accounts };
       }
@@ -450,12 +478,32 @@ export class DerivService {
   }
 
   async subscribeTick(symbol, count = 300) {
-    try {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        await this.connectPublicWs();
+    // Ensure connection is ready before doing anything
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      // Queue this symbol to be subscribed once connected
+      if (!this._pendingSubscriptions) this._pendingSubscriptions = [];
+      if (!this._pendingSubscriptions.includes(symbol)) {
+        this._pendingSubscriptions.push(symbol);
       }
+      // Kick off connection (no-op if already connecting)
+      this.connectPublicWs().catch(() => {});
+      return;
+    }
 
-      // 1. Fetch historical ticks using exact Deriv API schema (300 ticks)
+    // Validate symbol against active symbols list if we have one loaded
+    if (this.availableSymbols && this.availableSymbols.length > 0) {
+      const valid = this.availableSymbols.some(s => s.symbol === symbol);
+      if (!valid) {
+        console.warn(`Symbol ${symbol} not in active_symbols list — skipping subscription.`);
+        return;
+      }
+    }
+
+    // Track the last subscribed symbol for auto-reconnect
+    this._lastSubscribedSymbol = symbol;
+
+    try {
+      // 1. Fetch 300 historical ticks first (fire and forget, result handled in handleMessage)
       this.send({
         ticks_history: symbol,
         adjust_start_time: 1,
