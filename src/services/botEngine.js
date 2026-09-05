@@ -29,7 +29,10 @@ export class NeptuneBotEngine {
     this.symbolRichTicks = new Map();
     this.lastQuoteBySymbol = new Map();
     this.lastTickTimeBySymbol = new Map();
+    this.pipSizeBySymbol = new Map();       // pip size per symbol for correct digit extraction
+    this.totalTicksBySymbol = new Map();    // running tick count per symbol
     this.activeSymbol = '1HZ10V';
+
     
     // Terminal Logs
     this.logs = [];
@@ -63,29 +66,49 @@ export class NeptuneBotEngine {
     const evenPct = total > 0 ? Math.round((evens / total) * 100) : 44;
     const oddPct = total > 0 ? 100 - evenPct : 56;
 
-    // Per-symbol live price (strictly 2 decimal places as requested)
-    const rawPrice = lastRich?.quote 
+    // Per-symbol raw live price (as a number so component can format it)
+    const rawPrice = (lastRich?.quote && lastRich.quote > 0)
       ? lastRich.quote 
-      : (this.lastQuoteBySymbol?.get(targetSymbol) || (this.activeSymbol === targetSymbol ? this.lastQuote : null) || 20.49);
-    const symPrice = typeof rawPrice === 'number' ? rawPrice.toFixed(2) : (Number(rawPrice) ? Number(rawPrice).toFixed(2) : String(rawPrice));
+      : (this.lastQuoteBySymbol?.get(targetSymbol) || (this.activeSymbol === targetSymbol ? this.lastQuote : null) || null);
+    // Return as number for component formatting; fallback to null so UI shows '-' not a fake price
+    const symPrice = rawPrice ? Number(rawPrice) : null;
 
-    // Per-symbol current digit
-    const symDigit = lastRich?.lastDigit !== undefined
-      ? lastRich.lastDigit
-      : (symTicks.length > 0 ? symTicks[symTicks.length - 1] : (this.lastTickDigit !== undefined ? this.lastTickDigit : 4));
+    // Current digit = last digit of the FULL pip-precision display value (not the 2-dp truncated price)
+    // Use pip_size stored per symbol to extract the correct last digit from the actual price
+    const pip = this.pipSizeBySymbol?.get(targetSymbol) || 4;
+    let symDigit;
+    if (lastRich?.lastDigit !== undefined && lastRich.lastDigit !== null) {
+      symDigit = lastRich.lastDigit;
+    } else if (rawPrice) {
+      // Derive from the full pip precision display value
+      const fullDisplay = Number(rawPrice).toFixed(pip);
+      symDigit = parseInt(fullDisplay.slice(-1), 10);
+    } else if (symTicks.length > 0) {
+      symDigit = symTicks[symTicks.length - 1];
+    } else {
+      symDigit = this.lastTickDigit !== undefined ? this.lastTickDigit : null;
+    }
 
     // Per-symbol last update time
-    const symUpdate = this.lastTickTimeBySymbol?.get(targetSymbol) || this.lastTickTime || new Date().toLocaleTimeString('en-GB');
+    const symUpdate = this.lastTickTimeBySymbol?.get(targetSymbol) || this.lastTickTime || null;
 
     // Per-symbol total ticks (tracks collected ticks lively starting from 300)
-    const symTotalTicks = this.totalTicksBySymbol?.get(targetSymbol) || (symTicks.length > 0 ? symTicks.length : (this.totalTicksReceived || 300));
+    const symTotalTicks = this.totalTicksBySymbol?.get(targetSymbol) || (symTicks.length > 0 ? symTicks.length : (this.totalTicksReceived || 0));
 
-    // Dynamic volatility calculation based on price movement
-    let symVolatility = 1.2;
+    // Dynamic volatility: computed from real price deltas OR estimated from symbol type
+    let symVolatility = null;
     if (richList.length >= 5) {
-      const deltas = richList.slice(-15).map(r => Math.abs(r.priceDelta || 0));
-      const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-      symVolatility = Math.max(0.4, Number((avgDelta * 10 + 0.8).toFixed(1)));
+      const deltas = richList.slice(-20).map(r => Math.abs(r.priceDelta || 0)).filter(d => d > 0);
+      if (deltas.length >= 3) {
+        const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+        // Scale by pip factor so it reads as a human-friendly index (e.g. 1.2)
+        symVolatility = Math.max(0.3, Number((avgDelta * Math.pow(10, pip - 1)).toFixed(1)));
+      }
+    }
+    // Fallback: estimate from symbol name (e.g. 1HZ10V -> 1.0, 1HZ100V -> 10.0)
+    if (symVolatility === null) {
+      const volMatch = targetSymbol.match(/(\d+)V$/);
+      symVolatility = volMatch ? Math.max(0.5, Number(volMatch[1]) / 10) : 1.2;
     }
 
     return {
@@ -174,7 +197,7 @@ export class NeptuneBotEngine {
 
       this.lastTickTimeBySymbol.set(symbol, nowTime);
 
-      const symTicksCount = (this.totalTicksBySymbol.get(symbol) || 300) + 1;
+      const symTicksCount = (this.totalTicksBySymbol.get(symbol) || 0) + 1;
       this.totalTicksBySymbol.set(symbol, symTicksCount);
     }
 
@@ -186,7 +209,7 @@ export class NeptuneBotEngine {
       this.lastTickTime = nowTime;
     }
 
-    this.totalTicksReceived = (this.totalTicksReceived || 300) + 1;
+    this.totalTicksReceived = (this.totalTicksReceived || 0) + 1;
 
     this.recentTickDigits.push(digit);
     if (this.recentTickDigits.length > 300) {

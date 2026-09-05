@@ -237,6 +237,9 @@ export function App() {
       }
     };
 
+    // Use a ref so the tick handler always sees the latest active symbol without stale closure
+    const activeSymRef = { current: config?.activeSymbols?.[0] || '1HZ10V' };
+
     const onTick = (tickData) => {
       if (tickData && tickData.lastDigit !== undefined) {
         botEngine.recordTickDigit(
@@ -246,8 +249,9 @@ export function App() {
           tickData.displayValue, 
           tickData.pipSize
         );
-        // Force botState update to guarantee immediate component re-render
-        setBotState(botEngine.getState(config?.activeSymbols?.[0]));
+        // Always render using the currently selected symbol's data
+        const currentSym = botEngine.activeSymbol || activeSymRef.current;
+        setBotState(botEngine.getState(currentSym));
       }
     };
 
@@ -259,7 +263,8 @@ export function App() {
           histData.prices || [], 
           histData.pipSize
         );
-        setBotState(botEngine.getState(config?.activeSymbols?.[0]));
+        const currentSym = botEngine.activeSymbol || activeSymRef.current;
+        setBotState(botEngine.getState(currentSym));
       }
     };
 
@@ -533,8 +538,8 @@ export function App() {
                 prediction={currentPrediction}
                 confidence={currentConfidence}
                 activeSymbolName={activeSymbolDisplayName}
-                variance={botState.volatility || 1.2}
-                currentPrice={botState.livePrice || 18.91691}
+                variance={botState.volatility !== null ? Number(botState.volatility).toFixed(1) : '—'}
+                currentPrice={botState.livePrice}
                 frequencyPatternPct={6.0}
                 isCalculating={isAiCalculating}
                 onTriggerAnalysis={handleAnalyzeMatches}
@@ -611,8 +616,8 @@ export function App() {
               prediction={currentPrediction}
               confidence={currentConfidence}
               activeSymbolName={activeSymbolDisplayName}
-              variance={botState.volatility || 1.2}
-              currentPrice={botState.livePrice || 18.91691}
+              variance={botState.volatility !== null ? Number(botState.volatility).toFixed(1) : '—'}
+              currentPrice={botState.livePrice}
               frequencyPatternPct={6.0}
               isCalculating={isAiCalculating}
               onTriggerAnalysis={handleAnalyzeMatches}
