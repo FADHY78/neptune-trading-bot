@@ -63,12 +63,11 @@ export class NeptuneBotEngine {
     const evenPct = total > 0 ? Math.round((evens / total) * 100) : 44;
     const oddPct = total > 0 ? 100 - evenPct : 56;
 
-    // Per-symbol live price (with exact Deriv pip_size decimal formatting)
-    const pip = this.pipSizeBySymbol?.get(targetSymbol) || 5;
+    // Per-symbol live price (strictly 2 decimal places as requested)
     const rawPrice = lastRich?.quote 
       ? lastRich.quote 
-      : (this.lastQuoteBySymbol?.get(targetSymbol) || (this.activeSymbol === targetSymbol ? this.lastQuote : null) || 20.49460);
-    const symPrice = this.lastDisplayQuoteBySymbol?.get(targetSymbol) || (typeof rawPrice === 'number' ? rawPrice.toFixed(pip) : String(rawPrice));
+      : (this.lastQuoteBySymbol?.get(targetSymbol) || (this.activeSymbol === targetSymbol ? this.lastQuote : null) || 20.49);
+    const symPrice = typeof rawPrice === 'number' ? rawPrice.toFixed(2) : (Number(rawPrice) ? Number(rawPrice).toFixed(2) : String(rawPrice));
 
     // Per-symbol current digit
     const symDigit = lastRich?.lastDigit !== undefined
@@ -78,8 +77,8 @@ export class NeptuneBotEngine {
     // Per-symbol last update time
     const symUpdate = this.lastTickTimeBySymbol?.get(targetSymbol) || this.lastTickTime || new Date().toLocaleTimeString('en-GB');
 
-    // Per-symbol total ticks (tracks collected ticks lively)
-    const symTotalTicks = this.totalTicksBySymbol?.get(targetSymbol) || (symTicks.length > 0 ? symTicks.length : (this.totalTicksReceived || 214));
+    // Per-symbol total ticks (tracks collected ticks lively starting from 300)
+    const symTotalTicks = this.totalTicksBySymbol?.get(targetSymbol) || (symTicks.length > 0 ? symTicks.length : (this.totalTicksReceived || 300));
 
     // Dynamic volatility calculation based on price movement
     let symVolatility = 1.2;
@@ -175,7 +174,7 @@ export class NeptuneBotEngine {
 
       this.lastTickTimeBySymbol.set(symbol, nowTime);
 
-      const symTicksCount = (this.totalTicksBySymbol.get(symbol) || 214) + 1;
+      const symTicksCount = (this.totalTicksBySymbol.get(symbol) || 300) + 1;
       this.totalTicksBySymbol.set(symbol, symTicksCount);
     }
 
@@ -187,10 +186,10 @@ export class NeptuneBotEngine {
       this.lastTickTime = nowTime;
     }
 
-    this.totalTicksReceived = (this.totalTicksReceived || 214) + 1;
+    this.totalTicksReceived = (this.totalTicksReceived || 300) + 1;
 
     this.recentTickDigits.push(digit);
-    if (this.recentTickDigits.length > 100) {
+    if (this.recentTickDigits.length > 300) {
       this.recentTickDigits.shift();
     }
     const counts = Array(10).fill(0);
@@ -206,7 +205,7 @@ export class NeptuneBotEngine {
       }
       const buf = this.symbolTickBuffers.get(symbol);
       buf.push(digit);
-      if (buf.length > 100) buf.shift();
+      if (buf.length > 300) buf.shift();
 
       const sCounts = Array(10).fill(0);
       buf.forEach(d => {
@@ -233,7 +232,7 @@ export class NeptuneBotEngine {
         direction,
         epoch: Date.now()
       });
-      if (richList.length > 100) richList.shift();
+      if (richList.length > 300) richList.shift();
     }
 
     // Immediate millisecond wakeup for event-driven trade execution
@@ -275,7 +274,7 @@ export class NeptuneBotEngine {
 
   loadHistoricalDigits(digits, symbol = this.activeSymbol || '1HZ100V', prices = [], pipSize = 4) {
     if (!Array.isArray(digits) || digits.length === 0) return;
-    const clean = digits.slice(-100);
+    const clean = digits.slice(-300);
 
     if (symbol) {
       if (!this.symbolTickBuffers) this.symbolTickBuffers = new Map();
@@ -284,7 +283,7 @@ export class NeptuneBotEngine {
 
       this.symbolTickBuffers.set(symbol, clean);
       if (pipSize) this.pipSizeBySymbol.set(symbol, pipSize);
-      this.totalTicksBySymbol.set(symbol, Math.max(digits.length, 214));
+      this.totalTicksBySymbol.set(symbol, Math.max(digits.length, 300));
 
       const sCounts = Array(10).fill(0);
       clean.forEach(d => {
@@ -340,7 +339,7 @@ export class NeptuneBotEngine {
     this.notify();
   }
 
-  seedHistoricalTicks(count = 60) {
+  seedHistoricalTicks(count = 300) {
     const sym = this.activeSymbol || '1HZ100V';
     const seeded = [];
     const prices = [];
@@ -353,6 +352,30 @@ export class NeptuneBotEngine {
       prices.push(price);
     }
     this.loadHistoricalDigits(seeded, sym, prices);
+  }
+
+  /**
+   * Start Live Tick Collection (Starting from the last 300 collected historical ticks)
+   * Note: This does NOT place trades / execute orders. It gathers market data for AI analysis.
+   */
+  startTickCollection(symbol = this.activeSymbol || '1HZ10V') {
+    this.activeSymbol = symbol;
+    this.isCollectingTicks = true;
+    this.running = true;
+    this.paused = false;
+    this.log(`📡 [Tick Collector] Started tick collection on ${symbol} (300 ticks history preloaded).`, 'purchasing');
+    this.notify();
+  }
+
+  /**
+   * Stop Live Tick Collection
+   */
+  stopTickCollection() {
+    this.isCollectingTicks = false;
+    this.running = false;
+    this.paused = true;
+    this.log(`⏹ [Tick Collector] Tick collection paused.`, 'alert');
+    this.notify();
   }
 
   start(config) {

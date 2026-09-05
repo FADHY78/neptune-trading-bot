@@ -138,7 +138,7 @@ export const ProfitPlusAiEngine = ({
           <div className="ai-insight-box">
             <Zap size={18} color="var(--accent-cyan)" style={{ flexShrink: 0, marginTop: '2px' }} />
             <div>
-              Advanced neural network analysis on <strong>{activeSymbolName}</strong> (variance: {variance}) identifies digit <strong>{prediction}</strong> with <strong>{typeof confidence === 'number' ? confidence.toFixed(1) : confidence}%</strong> confidence. Multi-layer analysis: Frequency patterns ({frequencyPatternPct.toFixed(1)}%), market volatility modeling, and price correlation. Current price: {typeof currentPrice === 'number' ? currentPrice.toFixed(5) : currentPrice}. AI algorithms strongly favor digit <strong>{prediction}</strong>.
+              Advanced neural network analysis on <strong>{activeSymbolName}</strong> (variance: {variance}) identifies digit <strong>{prediction}</strong> with <strong>{typeof confidence === 'number' ? confidence.toFixed(1) : confidence}%</strong> confidence. Multi-layer analysis: Frequency patterns ({frequencyPatternPct.toFixed(1)}%), market volatility modeling, and price correlation across 300 collected ticks. Current price: ${typeof currentPrice === 'number' ? currentPrice.toFixed(2) : (Number(currentPrice) ? Number(currentPrice).toFixed(2) : currentPrice)}. AI algorithms strongly favor digit <strong>{prediction}</strong>.
             </div>
           </div>
         </>

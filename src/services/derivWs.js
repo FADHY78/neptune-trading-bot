@@ -431,17 +431,35 @@ export class DerivService {
     }
   }
 
-  async subscribeTick(symbol) {
+  async fetchTicksHistory(symbol, count = 300) {
+    try {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        await this.connectPublicWs();
+      }
+      return await this.send({
+        ticks_history: symbol,
+        adjust_start_time: 1,
+        count: Number(count) || 300,
+        end: 'latest',
+        start: 1,
+        style: 'ticks'
+      });
+    } catch (e) {
+      console.warn(`Failed to fetch ticks_history for ${symbol}`, e);
+    }
+  }
+
+  async subscribeTick(symbol, count = 300) {
     try {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         await this.connectPublicWs();
       }
 
-      // 1. Fetch historical ticks using exact Deriv API schema
+      // 1. Fetch historical ticks using exact Deriv API schema (300 ticks)
       this.send({
         ticks_history: symbol,
         adjust_start_time: 1,
-        count: 214,
+        count: Number(count) || 300,
         end: 'latest',
         start: 1,
         style: 'ticks'

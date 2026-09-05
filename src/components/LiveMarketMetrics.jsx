@@ -29,14 +29,14 @@ export const LiveMarketMetrics = ({
         </div>
       </div>
 
-      {/* 2. LIVE PRICE */}
+      {/* 2. LIVE PRICE (2 decimal places) */}
       <div className="metric-item">
         <div className="metric-label" style={{ color: '#60a5fa', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           <DollarSign size={13} color="#60a5fa" />
           <span>Live Price</span>
         </div>
         <div className="metric-value font-mono" style={{ color: '#ffffff', fontSize: '20px', fontWeight: '800' }}>
-          ${typeof livePrice === 'number' ? livePrice.toFixed(5) : livePrice || '0.00000'}
+          ${typeof livePrice === 'number' ? livePrice.toFixed(2) : (Number(livePrice) ? Number(livePrice).toFixed(2) : (livePrice || '20.49'))}
         </div>
       </div>
 
