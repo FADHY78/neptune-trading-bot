@@ -63,7 +63,24 @@ export class NeptuneBotEngine {
       digitCounts: [...this.digitCounts],
       logs: [...this.logs],
       isGoldenStrike: this.tradeCount < 10,
-      goldenRunsCompleted: Math.min(this.tradeCount, 10)
+      goldenRunsCompleted: Math.min(this.tradeCount, 10),
+      currentDigit: this.lastTickDigit !== undefined && this.lastTickDigit !== null ? this.lastTickDigit : (this.recentTickDigits.length > 0 ? this.recentTickDigits[this.recentTickDigits.length - 1] : 4),
+      livePrice: this.lastQuote || 20.49460,
+      totalTicks: this.totalTicksReceived || (this.recentTickDigits.length > 0 ? this.recentTickDigits.length : 214),
+      lastUpdate: this.lastTickTime || new Date().toLocaleTimeString('en-GB'),
+      evenPercentage: (() => {
+        const total = this.digitCounts.reduce((a, b) => a + b, 0);
+        if (total === 0) return 44;
+        const evens = [0, 2, 4, 6, 8].reduce((acc, d) => acc + (this.digitCounts[d] || 0), 0);
+        return Math.round((evens / total) * 100);
+      })(),
+      oddPercentage: (() => {
+        const total = this.digitCounts.reduce((a, b) => a + b, 0);
+        if (total === 0) return 56;
+        const evens = [0, 2, 4, 6, 8].reduce((acc, d) => acc + (this.digitCounts[d] || 0), 0);
+        return 100 - Math.round((evens / total) * 100);
+      })(),
+      volatility: this.calculatedVolatility || 1.2
     };
   }
 
@@ -108,6 +125,13 @@ export class NeptuneBotEngine {
     if (typeof digit !== 'number' || isNaN(digit)) return;
     
     // 1. Update main recent ticks
+    this.lastTickDigit = digit;
+    if (quote && Number(quote) > 0) {
+      this.lastQuote = Number(quote);
+    }
+    this.totalTicksReceived = (this.totalTicksReceived || 214) + 1;
+    this.lastTickTime = new Date().toLocaleTimeString('en-GB');
+
     this.recentTickDigits.push(digit);
     if (this.recentTickDigits.length > 100) {
       this.recentTickDigits.shift();

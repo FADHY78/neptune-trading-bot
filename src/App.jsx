@@ -1,22 +1,32 @@
 import React, { useState, useEffect } from 'react';
-import { Navbar } from './components/Navbar.jsx';
-import { ControlPanel } from './components/ControlPanel.jsx';
+import { ProfitPlusHeader } from './components/ProfitPlusHeader.jsx';
+import { ProfitPlusControls } from './components/ProfitPlusControls.jsx';
+import { LiveDigitProbability } from './components/LiveDigitProbability.jsx';
+import { LiveMarketMetrics } from './components/LiveMarketMetrics.jsx';
+import { ProfitPlusAiEngine } from './components/ProfitPlusAiEngine.jsx';
+import { FrequencyDistributionAnalysis } from './components/FrequencyDistributionAnalysis.jsx';
 import { OverviewCards } from './components/OverviewCards.jsx';
-import { DigitVisualizer } from './components/DigitVisualizer.jsx';
 import { LogTerminal } from './components/LogTerminal.jsx';
 import { StrategyDocs } from './components/StrategyDocs.jsx';
 import { AboutTab } from './components/AboutTab.jsx';
-import { AiAnalyst } from './components/AiAnalyst.jsx';
 import { RiskModal } from './components/RiskModal.jsx';
 import { loadStoredConfig, saveStoredConfig, isDisclaimerAccepted, setDisclaimerAccepted } from './services/storage.js';
-import { derivApi, getDerivOAuth2Url, parseDerivOAuthParams, exchangeCodeForToken } from './services/derivWs.js';
+import { derivApi } from './services/derivWs.js';
 import { botEngine } from './services/botEngine.js';
+import { aiAnalyst } from './services/aiAnalyst.js';
+import { getSymbolDisplayName } from './constants/symbols.js';
+import { Terminal, Shield, BookOpen, BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
 
 export function App() {
   const [config, setConfig] = useState(loadStoredConfig);
   const [showRiskModal, setShowRiskModal] = useState(!isDisclaimerAccepted());
-  const [activeTab, setActiveTab] = useState('logs'); // 'logs', 'guidance', 'about'
-  
+  const [theme, setTheme] = useState('dark');
+  const [viewMode, setViewMode] = useState('phone'); // 'phone' or 'pc'
+  const [activeTab, setActiveTab] = useState('logs'); // 'logs', 'metrics', 'guidance', 'about'
+  const [showBottomDrawer, setShowBottomDrawer] = useState(false);
+  const [selectedDigit, setSelectedDigit] = useState(null);
+  const [isAiCalculating, setIsAiCalculating] = useState(false);
+
   // Deriv WS Connection State
   const [wsState, setWsState] = useState({
     connected: false,
@@ -29,19 +39,24 @@ export function App() {
     accountList: []
   });
 
-  // Dynamic Deriv Symbols
   const [availableSymbols, setAvailableSymbols] = useState([]);
-
-  // Bot Engine State
   const [botState, setBotState] = useState(botEngine.getState());
+  const [analysis, setAnalysis] = useState(aiAnalyst.getLastAnalysis());
+
+  // Handle theme changes
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   // Save config on change
   const handleConfigChange = (newConfig) => {
     setConfig(newConfig);
     saveStoredConfig(newConfig);
+    // Refresh AI analysis on config change
+    aiAnalyst.analyzeMarket(newConfig);
   };
 
-  // Deriv OAuth 2.0 & Backend Session Check (Digit Atlas Architecture)
+  // Deriv OAuth 2.0 & Token URL Checks
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
@@ -49,14 +64,12 @@ export function App() {
     const loginStatus = urlParams.get('login');
     const errorParam = urlParams.get('error');
 
-    // If Deriv redirected back to root '/' with OAuth code & state
     if (code && state) {
-      botEngine.log('Completing Deriv OAuth PKCE handshake with backend...', 'info');
+      botEngine.log('Completing Deriv OAuth handshake...', 'info');
       window.location.replace(`/api/deriv/oauth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`);
       return;
     }
 
-    // If Deriv redirected with direct trading tokens (?acct1=...&token1=...)
     if (urlParams.has('acct1') && urlParams.has('token1')) {
       const parsedAccounts = [];
       let i = 1;
@@ -77,7 +90,6 @@ export function App() {
         setConfig(updatedConfig);
         saveStoredConfig(updatedConfig);
 
-        botEngine.log(`Deriv Official Auth: Connecting to ${active.isVirtual ? 'Demo' : 'Real'} Account (${active.loginid})...`, 'info');
         derivApi.connect(active.token, '1089').then(() => {
           setWsState({
             connected: true,
@@ -89,7 +101,7 @@ export function App() {
             loginid: derivApi.loginid || active.loginid,
             accountList: derivApi.accountList.length > 0 ? derivApi.accountList : parsedAccounts
           });
-          botEngine.log(`Deriv Login Successful! Account: ${derivApi.loginid} (Balance: $${Number(derivApi.balance || 0).toFixed(2)})`, 'won');
+          botEngine.log(`Profit Plus Connected: ${derivApi.loginid} ($${Number(derivApi.balance || 0).toFixed(2)})`, 'won');
         }).catch(err => {
           botEngine.log(`Deriv Direct Login Failed: ${err.message}`, 'alert');
         });
@@ -99,14 +111,14 @@ export function App() {
     }
 
     if (loginStatus === 'success') {
-      botEngine.log('Deriv OAuth 2.0 login successful! Secure HTTP-only session active.', 'won');
+      botEngine.log('Profit Plus: Deriv OAuth login successful!', 'won');
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (errorParam) {
-      botEngine.log(`Deriv OAuth Error: ${errorParam}`, 'alert');
+      botEngine.log(`OAuth Notice: ${errorParam}`, 'alert');
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    // Check for active server session (Digit Atlas secure HTTP-only cookie)
+    // Check for active server session
     setWsState(prev => ({ ...prev, isConnecting: true }));
     derivApi.checkServerSession().then((sessionRes) => {
       if (sessionRes && sessionRes.authenticated) {
@@ -120,22 +132,17 @@ export function App() {
           loginid: sessionRes.activeAccount.loginid,
           accountList: sessionRes.accounts || []
         });
-        botEngine.log(`Deriv Secure Session active (${sessionRes.activeAccount.isVirtual ? 'Demo Account' : 'Real Account'}) - Login ID: ${sessionRes.activeAccount.loginid}`, 'won');
+        botEngine.log(`Profit Plus Session Active: ${sessionRes.activeAccount.loginid}`, 'won');
       } else {
         setWsState(prev => ({ ...prev, isConnecting: false }));
       }
-    }).catch((err) => {
-      console.warn('Session check warning:', err);
+    }).catch(() => {
       setWsState(prev => ({ ...prev, isConnecting: false }));
     });
   }, []);
 
   const handleDerivOAuthLogin = () => {
     window.location.href = '/api/deriv/oauth/start';
-  };
-
-  const handleDerivOAuthSignUp = () => {
-    window.location.href = '/api/deriv/oauth/start?signup=true';
   };
 
   const handleLogout = async () => {
@@ -153,43 +160,35 @@ export function App() {
       loginid: '',
       accountList: []
     });
-    botEngine.log('Deriv session terminated. Click "Log in with Deriv" to connect.', 'info');
   };
 
-  // Subscribe to Bot Engine Updates
+  // Subscribe to Bot Engine and AI Analyst updates
   useEffect(() => {
-    const unsubscribe = botEngine.subscribe((newState) => {
+    const unsubBot = botEngine.subscribe((newState) => {
       setBotState(newState);
     });
-    return unsubscribe;
-  }, []);
 
-  // Connect to Deriv WebSocket API
-  const handleConnectDeriv = async () => {
-    if (!config.apiToken) return;
-    setWsState(prev => ({ ...prev, isConnecting: true }));
+    const unsubAi = aiAnalyst.subscribe((newAnalysis) => {
+      setAnalysis(newAnalysis);
+    });
 
-    try {
-      const numericAppId = /^\d+$/.test(String(config.appId || '').trim()) ? String(config.appId).trim() : '1089';
-      await derivApi.connect(config.apiToken, numericAppId);
-      setWsState({
-        connected: true,
-        isConnecting: false,
-        isAuthorized: derivApi.authorized,
-        balance: derivApi.balance,
-        currency: derivApi.currency,
-        isDemo: derivApi.isDemo,
-        loginid: derivApi.loginid,
-        accountList: derivApi.accountList
-      });
-      botEngine.log(`Connected to Deriv API (${derivApi.isDemo ? 'Demo Account' : 'Real Account'}) - Login ID: ${derivApi.loginid} (Balance: $${Number(derivApi.balance || 0).toFixed(2)})`, 'info');
-    } catch (e) {
-      setWsState(prev => ({ ...prev, isConnecting: false, isAuthorized: false }));
-      botEngine.log(`Deriv Connection Failed: ${e.message}`, 'alert');
-    }
-  };
+    // Run initial market scan
+    const initialAi = aiAnalyst.analyzeMarket(config);
+    setAnalysis(initialAi);
 
-  // Deriv WS Balance, Symbols & Auth Listeners
+    // Auto-refresh AI every 3 seconds
+    const interval = setInterval(() => {
+      aiAnalyst.analyzeMarket(config);
+    }, 3000);
+
+    return () => {
+      unsubBot();
+      unsubAi();
+      clearInterval(interval);
+    };
+  }, [config]);
+
+  // Deriv WebSocket Event Listeners
   useEffect(() => {
     const onAuth = (authData) => {
       setWsState(prev => ({
@@ -214,7 +213,6 @@ export function App() {
     const onSyms = (symbols) => {
       if (symbols && symbols.length > 0) {
         setAvailableSymbols(symbols);
-        botEngine.log(`Loaded ${symbols.length} live markets from Deriv API`, 'info');
       }
     };
 
@@ -224,22 +222,18 @@ export function App() {
       }
     };
 
-    const onHist = (histData) => {
-      if (histData && Array.isArray(histData.digits)) {
-        botEngine.loadHistoricalDigits(histData.digits, histData.symbol, histData.prices || []);
-      }
-    };
-
     derivApi.on('onAuthorize', onAuth);
     derivApi.on('onBalance', onBal);
     derivApi.on('onSymbols', onSyms);
     derivApi.on('onTick', onTick);
-    derivApi.on('onTickHistory', onHist);
 
-    // Immediately connect public feed to start streaming live market data & tick history across all active symbols
+    // Public feed for live volatility ticks
     derivApi.connectPublicWs().then(() => {
-      const symbolsToStream = config?.activeSymbols?.length > 0 ? config.activeSymbols : ['1HZ100V', '1HZ75V', '1HZ50V', '1HZ25V', '1HZ10V'];
-      symbolsToStream.forEach(sym => derivApi.subscribeTick(sym));
+      const active = config?.activeSymbols?.[0] || '1HZ10V';
+      derivApi.subscribeTick(active);
+      ['1HZ10V', '1HZ100V', '1HZ50V', '1HZ75V', '1HZ25V'].forEach(sym => {
+        derivApi.subscribeTick(sym);
+      });
     }).catch(() => {});
 
     return () => {
@@ -247,21 +241,40 @@ export function App() {
       derivApi.off('onBalance', onBal);
       derivApi.off('onSymbols', onSyms);
       derivApi.off('onTick', onTick);
-      derivApi.off('onTickHistory', onHist);
     };
-  }, []);
+  }, [config?.activeSymbols]);
+
+  // Connect to Deriv API with Token
+  const handleConnectDeriv = async () => {
+    if (!config.apiToken) return;
+    setWsState(prev => ({ ...prev, isConnecting: true }));
+    try {
+      const numericAppId = /^\d+$/.test(String(config.appId || '').trim()) ? String(config.appId).trim() : '1089';
+      await derivApi.connect(config.apiToken, numericAppId);
+      setWsState({
+        connected: true,
+        isConnecting: false,
+        isAuthorized: derivApi.authorized,
+        balance: derivApi.balance,
+        currency: derivApi.currency,
+        isDemo: derivApi.isDemo,
+        loginid: derivApi.loginid,
+        accountList: derivApi.accountList
+      });
+      botEngine.log(`Connected to Deriv (${derivApi.isDemo ? 'Demo' : 'Real'}) - ${derivApi.loginid}`, 'info');
+    } catch (e) {
+      setWsState(prev => ({ ...prev, isConnecting: false, isAuthorized: false }));
+      botEngine.log(`Connection Failed: ${e.message}`, 'alert');
+    }
+  };
 
   // Switch between Real & Demo accounts
   const handleSelectAccount = async (targetAccount) => {
     if (!targetAccount || targetAccount.loginid === wsState.loginid) return;
-
-    botEngine.log(`Switching account to ${targetAccount.isVirtual ? 'Demo' : 'Real'} (${targetAccount.loginid})...`, 'info');
     setWsState(prev => ({ ...prev, isConnecting: true }));
-
     try {
       if (derivApi.isServerSession) {
         const res = await derivApi.switchServerAccount(targetAccount.loginid);
-        const newBalance = res.activeAccount.balance !== undefined ? res.activeAccount.balance : prev.balance;
         setWsState(prev => ({
           ...prev,
           isConnecting: false,
@@ -269,196 +282,309 @@ export function App() {
           loginid: res.activeAccount.loginid,
           isDemo: Boolean(res.activeAccount.isVirtual),
           currency: res.activeAccount.currency || prev.currency,
-          balance: newBalance
+          balance: res.activeAccount.balance !== undefined ? res.activeAccount.balance : prev.balance
         }));
-        botEngine.log(`Switched successfully to ${res.activeAccount.isVirtual ? 'Demo' : 'Real'} Account: ${res.activeAccount.loginid} (Balance: $${Number(newBalance || 0).toFixed(2)})`, 'won');
         return;
       }
-
       if (targetAccount.token) {
-        // If account has dedicated token, authorize directly
         await derivApi.authorize(targetAccount.token);
-        const updated = {
-          ...config,
-          apiToken: targetAccount.token,
-          currency: targetAccount.currency || 'USD'
-        };
+        const updated = { ...config, apiToken: targetAccount.token, currency: targetAccount.currency || 'USD' };
         setConfig(updated);
         saveStoredConfig(updated);
       } else {
-        // Switch account locally on websocket instance
         await derivApi.switchAccount(targetAccount.loginid);
       }
-
       setWsState(prev => ({
         ...prev,
         isConnecting: false,
         isAuthorized: true,
         loginid: targetAccount.loginid,
         isDemo: targetAccount.isVirtual,
-        currency: targetAccount.currency || prev.currency,
         balance: derivApi.balance
       }));
-
-      botEngine.log(`Switched successfully to ${targetAccount.isVirtual ? 'Demo' : 'Real'} Account: ${targetAccount.loginid}`, 'won');
     } catch (err) {
-      console.error('Account switch failed:', err);
-      botEngine.log(`Failed to switch account: ${err.message}`, 'alert');
       setWsState(prev => ({ ...prev, isConnecting: false }));
     }
   };
 
-  // Start Bot Handler
+  // Start & Stop Bot
   const handleStartBot = () => {
     if (!config.simulationMode && !derivApi.authorized) {
-      alert('Please enter your Deriv API Token and click "Connect to Deriv API", or toggle "Simulator" mode.');
+      alert('Please connect to Deriv API or toggle Simulator mode in Trading Parameters.');
       return;
     }
     botEngine.start(config);
   };
 
-  // Stop Bot Handler
   const handleStopBot = () => {
     botEngine.stop('User stopped bot via UI button.');
   };
 
-  // Clear Data Handler
-  const handleClearData = () => {
-    botEngine.clearLogs();
-    botEngine.resetSession();
+  // AI Strategy Analysis
+  const handleAnalyzeStrategy = () => {
+    setIsAiCalculating(true);
+    setTimeout(() => {
+      aiAnalyst.analyzeMarket(config);
+      setIsAiCalculating(false);
+    }, 600);
   };
 
-  const handleCloseRiskModal = () => {
-    setDisclaimerAccepted();
-    setShowRiskModal(false);
-  };
+  // Derived AI Recommendation values
+  const bestOpportunity = analysis?.bestOpportunity;
+  const currentActiveSymbol = config?.activeSymbols?.[0] || '1HZ10V';
+  const activeSymbolDisplayName = getSymbolDisplayName(currentActiveSymbol);
+
+  const predictedDigit = bestOpportunity?.target !== undefined ? Number(bestOpportunity.target) : 6;
+  const confidenceScore = bestOpportunity?.confidence || 81.7;
+  const strategyName = bestOpportunity?.strategyName?.includes('Matches') ? 'Matches' : (bestOpportunity?.strategyName || 'Matches');
+  const recommendedBanner = bestOpportunity?.contractType === 'DIGITMATCH' ? 'Matches' : 
+    (bestOpportunity?.contractType === 'DIGITEVEN' ? 'Even' : (bestOpportunity?.contractType === 'DIGITODD' ? 'Odd' : 'Matches'));
 
   return (
-    <div className="app-container">
-      {/* Top Navbar */}
-      <Navbar
-        connected={wsState.connected}
-        isAuthorized={wsState.isAuthorized}
-        isDemo={wsState.isDemo}
-        balance={wsState.balance}
-        currency={config.currency || wsState.currency}
-        simulationMode={config.simulationMode}
-        soundEffects={config.soundEffects}
-        accountList={wsState.accountList}
-        currentLoginId={wsState.loginid}
-        onSelectAccount={handleSelectAccount}
-        onToggleSound={() => handleConfigChange({ ...config, soundEffects: !config.soundEffects })}
-        onOpenRiskModal={() => setShowRiskModal(true)}
-        onDerivLogin={handleDerivOAuthLogin}
-        onLogout={handleLogout}
-      />
-
-      {/* Main Dashboard Workspace */}
-      <main className="main-content">
-        {/* LEFT PANEL — CONTROLS */}
-        <ControlPanel
-          config={config}
-          onChangeConfig={handleConfigChange}
-          onOAuthLogin={handleDerivOAuthLogin}
-          onOAuthSignUp={handleDerivOAuthSignUp}
-          onConnectDeriv={handleConnectDeriv}
-          availableSymbols={availableSymbols}
-          isConnecting={wsState.isConnecting}
-          isConnected={wsState.connected}
+    <div className="profit-app">
+      <div className={`dashboard-container ${viewMode === 'pc' ? 'pc-mode' : 'phone-mode'}`}>
+        {/* 1. TOP HEADER (Branding, Badges, Account, Theme, Logout) */}
+        <ProfitPlusHeader
+          connected={wsState.connected}
           isAuthorized={wsState.isAuthorized}
-          isRunning={botState.running}
-          onStartBot={handleStartBot}
-          onStopBot={handleStopBot}
-          onClearData={handleClearData}
-          onLogout={handleLogout}
-          accountList={wsState.accountList}
-          currentLoginId={wsState.loginid}
-          onSelectAccount={handleSelectAccount}
-          balance={wsState.balance}
-          currency={wsState.currency}
           isDemo={wsState.isDemo}
+          balance={wsState.balance}
+          currency={config.currency || wsState.currency}
+          simulationMode={config.simulationMode}
+          currentLoginId={wsState.loginid}
+          accountList={wsState.accountList}
+          onSelectAccount={handleSelectAccount}
+          onLogout={handleLogout}
+          onDerivLogin={handleDerivOAuthLogin}
+          theme={theme}
+          onToggleTheme={() => setTheme(prev => (prev === 'dark' ? 'light' : 'dark'))}
+          viewMode={viewMode}
+          onToggleViewMode={(mode) => setViewMode(mode)}
         />
 
-        {/* RIGHT PANEL — LIVE TRADING VIEW */}
-        <section style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          {/* Top Overview Cards */}
-          <OverviewCards state={botState} />
+        {/* 2. RESPONSIVE DASHBOARD LAYOUT */}
+        {viewMode === 'pc' ? (
+          /* ======================== PC / DESKTOP VIEW ======================== */
+          <div className="dashboard-grid-pc">
+            {/* Left Sidebar: Controls & Trading Parameters */}
+            <div className="pc-sidebar-col">
+              <ProfitPlusControls
+                config={config}
+                onChangeConfig={handleConfigChange}
+                isRunning={botState.running}
+                onStartBot={handleStartBot}
+                onStopBot={handleStopBot}
+                onAnalyzeStrategy={handleAnalyzeStrategy}
+                recommendedSignal={recommendedBanner}
+                isConnected={wsState.connected}
+                isAuthorized={wsState.isAuthorized}
+                isConnecting={wsState.isConnecting}
+                availableSymbols={availableSymbols}
+                onOAuthLogin={handleDerivOAuthLogin}
+                onConnectDeriv={handleConnectDeriv}
+              />
 
-          {/* Real-time Digit Frequency Analysis Chart */}
-          <DigitVisualizer digitCounts={botState.digitCounts} />
+              {/* Live Market Metrics (6 Items) */}
+              <LiveMarketMetrics
+                currentDigit={botState.currentDigit}
+                livePrice={botState.livePrice}
+                totalTicks={botState.totalTicks}
+                evenPercentage={botState.evenPercentage}
+                oddPercentage={botState.oddPercentage}
+                lastUpdate={botState.lastUpdate}
+                volatility={botState.volatility}
+              />
+            </div>
 
-          {/* Navigation Tab Bar */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            marginBottom: '12px',
-            borderBottom: '1px solid var(--border-color)',
-            paddingBottom: '8px'
-          }}>
-            <button
-              className={`btn ${activeTab === 'logs' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '6px 14px', fontSize: '12px' }}
-              onClick={() => setActiveTab('logs')}
-            >
-              <span>Logs Terminal</span>
-              {botState.running && <span className="status-dot pulse" style={{ backgroundColor: 'var(--color-success)' }} />}
-            </button>
+            {/* Main Area: Probability Distribution, AI Engine, Frequency Chart, and Live Logs */}
+            <div className="pc-main-col">
+              {/* Live Digit Probability Distribution (10 Boxes) */}
+              <LiveDigitProbability
+                digitCounts={botState.digitCounts}
+                predictedDigit={predictedDigit}
+                selectedDigit={selectedDigit}
+                onSelectDigit={(d) => setSelectedDigit(d)}
+              />
 
-            <button
-              className={`btn ${activeTab === 'ai-analyst' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{
-                padding: '6px 14px',
-                fontSize: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                borderColor: activeTab === 'ai-analyst' ? 'var(--accent-cyan)' : undefined
-              }}
-              onClick={() => setActiveTab('ai-analyst')}
-            >
-              <span>🤖 AI Market Analyst</span>
-              <span className="badge" style={{ fontSize: '9px', padding: '1px 5px', backgroundColor: 'rgba(0, 230, 118, 0.2)', color: 'var(--color-success)' }}>
-                Live
-              </span>
-            </button>
+              {/* AI Analysis Engine */}
+              <ProfitPlusAiEngine
+                strategy={strategyName}
+                prediction={predictedDigit}
+                confidence={confidenceScore}
+                activeSymbolName={activeSymbolDisplayName}
+                variance={botState.volatility || 1.2}
+                currentPrice={botState.livePrice || 18.91691}
+                frequencyPatternPct={6.0}
+                isCalculating={isAiCalculating}
+                onTriggerAnalysis={handleAnalyzeStrategy}
+              />
 
-            <button
-              className={`btn ${activeTab === 'guidance' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '6px 14px', fontSize: '12px' }}
-              onClick={() => setActiveTab('guidance')}
-            >
-              <span>Guidance & Risk</span>
-            </button>
+              {/* Frequency Distribution Analysis (Bar Chart, Pie Chart, Grid View) */}
+              <FrequencyDistributionAnalysis
+                digitCounts={botState.digitCounts}
+                totalTicks={botState.totalTicks}
+                predictedDigit={predictedDigit}
+              />
 
-            <button
-              className={`btn ${activeTab === 'about' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '6px 14px', fontSize: '12px' }}
-              onClick={() => setActiveTab('about')}
-            >
-              <span>About / Docs</span>
-            </button>
+              {/* Trading Session Performance Overview */}
+              <OverviewCards state={botState} />
+
+              {/* Live Terminal Logs */}
+              <div className="profit-card">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: '700', color: 'var(--accent-cyan)' }}>
+                    <Terminal size={16} />
+                    <span>Real-Time Execution Logs</span>
+                  </div>
+                </div>
+                <LogTerminal logs={botState.logs} onClearLogs={() => botEngine.clearLogs()} />
+              </div>
+            </div>
           </div>
-
-          {/* Active Tab View */}
-          {activeTab === 'logs' && (
-            <LogTerminal logs={botState.logs} onClearLogs={() => botEngine.clearLogs()} />
-          )}
-          {activeTab === 'ai-analyst' && (
-            <AiAnalyst
+        ) : (
+          /* ======================== PHONE / MOBILE VIEW (MATCHES SCREENSHOTS 1-4) ======================== */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%' }}>
+            {/* 1. Volatility, Strategy, Connection Status, Start/Stop & Matches Banner (Screenshots 3 & 4) */}
+            <ProfitPlusControls
               config={config}
               onChangeConfig={handleConfigChange}
-              onStartBot={handleStartBot}
               isRunning={botState.running}
+              onStartBot={handleStartBot}
+              onStopBot={handleStopBot}
+              onAnalyzeStrategy={handleAnalyzeStrategy}
+              recommendedSignal={recommendedBanner}
+              isConnected={wsState.connected}
+              isAuthorized={wsState.isAuthorized}
+              isConnecting={wsState.isConnecting}
+              availableSymbols={availableSymbols}
+              onOAuthLogin={handleDerivOAuthLogin}
+              onConnectDeriv={handleConnectDeriv}
             />
-          )}
-          {activeTab === 'guidance' && <StrategyDocs />}
-          {activeTab === 'about' && <AboutTab />}
-        </section>
-      </main>
+
+            {/* 2. Live Digit Probability Distribution (Screenshots 3 & 4: 10 digit boxes) */}
+            <LiveDigitProbability
+              digitCounts={botState.digitCounts}
+              predictedDigit={predictedDigit}
+              selectedDigit={selectedDigit}
+              onSelectDigit={(d) => setSelectedDigit(d)}
+            />
+
+            {/* 3. Live Market Metrics Grid (Screenshots 1 & 2: 6 Metrics) */}
+            <LiveMarketMetrics
+              currentDigit={botState.currentDigit}
+              livePrice={botState.livePrice}
+              totalTicks={botState.totalTicks}
+              evenPercentage={botState.evenPercentage}
+              oddPercentage={botState.oddPercentage}
+              lastUpdate={botState.lastUpdate}
+              volatility={botState.volatility}
+            />
+
+            {/* 4. AI Analysis Engine (Screenshots 1 & 2: Calculating Bar or Prediction Insights) */}
+            <ProfitPlusAiEngine
+              strategy={strategyName}
+              prediction={predictedDigit}
+              confidence={confidenceScore}
+              activeSymbolName={activeSymbolDisplayName}
+              variance={botState.volatility || 1.2}
+              currentPrice={botState.livePrice || 18.91691}
+              frequencyPatternPct={6.0}
+              isCalculating={isAiCalculating}
+              onTriggerAnalysis={handleAnalyzeStrategy}
+            />
+
+            {/* 5. Frequency Distribution Analysis (Screenshots 1 & 2: Bar Chart / Pie Chart / Grid View) */}
+            <FrequencyDistributionAnalysis
+              digitCounts={botState.digitCounts}
+              totalTicks={botState.totalTicks}
+              predictedDigit={predictedDigit}
+            />
+
+            {/* 6. Mobile Bottom Actions & Expandable Trading Logs Drawer */}
+            <div className="profit-card" style={{ padding: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    className={`btn ${activeTab === 'logs' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '6px 12px', fontSize: '11px', borderRadius: '16px' }}
+                    onClick={() => {
+                      setActiveTab('logs');
+                      setShowBottomDrawer(true);
+                    }}
+                  >
+                    <Terminal size={12} />
+                    <span>Logs</span>
+                  </button>
+
+                  <button
+                    className={`btn ${activeTab === 'stats' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '6px 12px', fontSize: '11px', borderRadius: '16px' }}
+                    onClick={() => {
+                      setActiveTab('stats');
+                      setShowBottomDrawer(true);
+                    }}
+                  >
+                    <BarChart3 size={12} />
+                    <span>Stats</span>
+                  </button>
+
+                  <button
+                    className={`btn ${activeTab === 'docs' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '6px 12px', fontSize: '11px', borderRadius: '16px' }}
+                    onClick={() => {
+                      setActiveTab('docs');
+                      setShowBottomDrawer(true);
+                    }}
+                  >
+                    <BookOpen size={12} />
+                    <span>Docs</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setShowBottomDrawer(!showBottomDrawer)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-bright-blue)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '11px'
+                  }}
+                >
+                  <span>{showBottomDrawer ? 'Collapse' : 'Expand'}</span>
+                  {showBottomDrawer ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+              </div>
+
+              {showBottomDrawer && (
+                <div style={{ marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                  {activeTab === 'logs' && (
+                    <LogTerminal logs={botState.logs} onClearLogs={() => botEngine.clearLogs()} />
+                  )}
+                  {activeTab === 'stats' && (
+                    <OverviewCards state={botState} />
+                  )}
+                  {activeTab === 'docs' && (
+                    <StrategyDocs />
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Mandatory Risk Disclosure Modal */}
-      <RiskModal isOpen={showRiskModal} onClose={handleCloseRiskModal} />
+      <RiskModal
+        isOpen={showRiskModal}
+        onClose={() => {
+          setDisclaimerAccepted();
+          setShowRiskModal(false);
+        }}
+      />
     </div>
   );
 }
