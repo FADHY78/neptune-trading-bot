@@ -12,6 +12,7 @@ export const ProfitPlusControls = ({
   onStartBot,
   onStopBot,
   onAnalyzeStrategy,
+  onAnalyzeMatches,
   recommendedSignal = 'Matches',
   isConnected,
   isAuthorized,
@@ -142,11 +143,24 @@ export const ProfitPlusControls = ({
         <span>Analyze Strategy</span>
       </button>
 
-      {/* 6. Strategic Signal Banner (e.g. Matches / Even / Odd) */}
-      <div className="signal-banner">
-        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ffffff', display: 'inline-block' }} />
-        <span>{recommendedSignal || 'Matches'}</span>
-      </div>
+      {/* 6. Strategic Signal / Matches Analysis Button (Clickable as in screenshots 3 & 4) */}
+      <button
+        type="button"
+        className="signal-banner"
+        onClick={() => onAnalyzeMatches ? onAnalyzeMatches() : onAnalyzeStrategy()}
+        style={{
+          border: 'none',
+          cursor: 'pointer',
+          width: '100%',
+          outline: 'none',
+          transition: 'transform 0.15s ease, box-shadow 0.2s ease',
+          userSelect: 'none'
+        }}
+        title="Click to analyze market for Matches digit"
+      >
+        <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#ffffff', display: 'inline-block', boxShadow: '0 0 6px #fff' }} />
+        <span>Matches</span>
+      </button>
 
       {/* 7. Collapsible Advanced Trading Parameters (Stake, Martingale, Stop Loss) */}
       <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
