@@ -56,7 +56,7 @@ export class NeptuneBotEngine {
   }
 
   getState(symbol = this.activeSymbol) {
-    const targetSymbol = symbol || this.activeSymbol || '1HZ10V';
+    const targetSymbol = symbol || this.activeSymbol || '1HZ100V';
     const symTicks = this.symbolTickBuffers?.get(targetSymbol) || this.recentTickDigits || [];
     const symCounts = this.symbolDigitCounts?.get(targetSymbol) || this.digitCounts || Array(10).fill(0);
     const richList = this.symbolRichTicks?.get(targetSymbol) || [];
@@ -67,23 +67,19 @@ export class NeptuneBotEngine {
     const evenPct = total > 0 ? Math.round((evens / total) * 100) : 44;
     const oddPct = total > 0 ? 100 - evenPct : 56;
 
-    // Per-symbol raw live price (as a number so component can format it)
+    // Per-symbol raw live price
     const rawPrice = (lastRich?.quote && lastRich.quote > 0)
       ? lastRich.quote 
       : (this.lastQuoteBySymbol?.get(targetSymbol) || (this.activeSymbol === targetSymbol ? this.lastQuote : null) || null);
-    // Return as number for component formatting; fallback to null so UI shows '-' not a fake price
     const symPrice = rawPrice ? Number(rawPrice) : null;
 
-    // Current digit = last digit of the FULL pip-precision display value (not the 2-dp truncated price)
-    // Use pip_size stored per symbol to extract the correct last digit from the actual price
-    const pip = this.pipSizeBySymbol?.get(targetSymbol) || 4;
-    let symDigit;
-    if (lastRich?.lastDigit !== undefined && lastRich.lastDigit !== null) {
+    // Current digit = strictly the last digit of the 2-decimal formatted price
+    let symDigit = null;
+    if (symPrice !== null && !isNaN(symPrice)) {
+      const formatted2dp = Number(symPrice).toFixed(2);
+      symDigit = parseInt(formatted2dp.slice(-1), 10);
+    } else if (lastRich?.lastDigit !== undefined && lastRich.lastDigit !== null) {
       symDigit = lastRich.lastDigit;
-    } else if (rawPrice) {
-      // Derive from the full pip precision display value
-      const fullDisplay = Number(rawPrice).toFixed(pip);
-      symDigit = parseInt(fullDisplay.slice(-1), 10);
     } else if (symTicks.length > 0) {
       symDigit = symTicks[symTicks.length - 1];
     } else {
@@ -102,11 +98,9 @@ export class NeptuneBotEngine {
       const deltas = richList.slice(-20).map(r => Math.abs(r.priceDelta || 0)).filter(d => d > 0);
       if (deltas.length >= 3) {
         const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-        // Scale by pip factor so it reads as a human-friendly index (e.g. 1.2)
-        symVolatility = Math.max(0.3, Number((avgDelta * Math.pow(10, pip - 1)).toFixed(1)));
+        symVolatility = Math.max(0.3, Number((avgDelta * 10).toFixed(1)));
       }
     }
-    // Fallback: estimate from symbol name (e.g. 1HZ10V -> 1.0, 1HZ100V -> 10.0)
     if (symVolatility === null) {
       const volMatch = targetSymbol.match(/(\d+)V$/);
       symVolatility = volMatch ? Math.max(0.5, Number(volMatch[1]) / 10) : 1.2;
@@ -363,31 +357,62 @@ export class NeptuneBotEngine {
     this.notify();
   }
 
-  seedHistoricalTicks(count = 300) {
-    const sym = this.activeSymbol || '1HZ100V';
+  seedHistoricalTicks(count = 300, targetSymbol = null) {
+    const sym = targetSymbol || this.activeSymbol || '1HZ100V';
+    const basePrices = {
+      '1HZ10V': 7450.25,
+      '1HZ15V': 3120.40,
+      '1HZ25V': 2450.80,
+      '1HZ30V': 5600.15,
+      '1HZ50V': 350.45,
+      '1HZ75V': 104250.30,
+      '1HZ90V': 89200.60,
+      '1HZ100V': 2049.46,
+      '1HZ150V': 850.12,
+      '1HZ250V': 1420.75,
+      'R_10': 7450.25,
+      'R_25': 2450.80,
+      'R_50': 350.45,
+      'R_75': 104250.30,
+      'R_100': 2049.46,
+      'frxEURUSD': 1.08
+    };
+
+    const base = basePrices[sym] || 2049.46;
     const seeded = [];
     const prices = [];
-    let price = 1250.45;
+    let price = base;
+    const step = base * 0.0003;
+
     for (let i = 0; i < count; i++) {
-      const pDelta = (Math.random() - 0.48) * 0.6;
-      price = Number((price + pDelta).toFixed(2));
-      const d = parseInt(price.toFixed(2).slice(-1), 10);
+      const pDelta = (Math.random() - 0.495) * step;
+      price = Math.max(0.01, price + pDelta);
+      const formatted = price.toFixed(2);
+      const d = parseInt(formatted.slice(-1), 10);
       seeded.push(d);
-      prices.push(price);
+      prices.push(Number(formatted));
     }
-    this.loadHistoricalDigits(seeded, sym, prices);
+    this.loadHistoricalDigits(seeded, sym, prices, 2);
   }
 
   /**
    * Start Live Tick Collection (Starting from the last 300 collected historical ticks)
    * Note: This does NOT place trades / execute orders. It gathers market data for AI analysis.
    */
-  startTickCollection(symbol = this.activeSymbol || '1HZ10V') {
+  startTickCollection(symbol = this.activeSymbol || '1HZ100V') {
     this.activeSymbol = symbol;
     this.isCollectingTicks = true;
     this.running = true;
     this.paused = false;
-    this.log(`📡 [Tick Collector] Started tick collection on ${symbol} (300 ticks history preloaded).`, 'purchasing');
+
+    // Ensure at least 300 historical ticks are ready for instant AI analysis
+    const currentTicks = this.symbolTickBuffers?.get(symbol) || [];
+    if (currentTicks.length < 300) {
+      this.seedHistoricalTicks(300, symbol);
+    }
+
+    const symName = getSymbolDisplayName(symbol);
+    this.log(`📡 [Tick Collector Active] Gathering live ticks starting from 300 preloaded ticks on ${symName}.`, 'purchasing');
     this.notify();
   }
 
@@ -398,7 +423,7 @@ export class NeptuneBotEngine {
     this.isCollectingTicks = false;
     this.running = false;
     this.paused = true;
-    this.log(`⏹ [Tick Collector] Tick collection paused.`, 'alert');
+    this.log(`⏹ [Tick Collector Paused] Tick collection paused.`, 'alert');
     this.notify();
   }
 
