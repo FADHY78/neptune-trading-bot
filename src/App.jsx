@@ -241,7 +241,7 @@ export function App() {
     };
 
     // Use a ref so the tick handler always sees the latest active symbol without stale closure
-    const activeSymRef = { current: config?.activeSymbols?.[0] || '1HZ10V' };
+    const activeSymRef = { current: config?.activeSymbols?.[0] || 'R_100' };
 
     const onTick = (tickData) => {
       if (tickData && tickData.lastDigit !== undefined) {
@@ -271,19 +271,27 @@ export function App() {
       }
     };
 
-    // When the active_symbols list is loaded, subscribe to the selected symbol
-    // This guarantees we only subscribe to symbols Deriv confirms as valid for this app_id
-    const onSymsWithSubscribe = (symbols) => {
+    // onSymbols: update UI dropdown AND pre-load pip sizes into botEngine for each symbol
+    const onSymsUpdate = (symbols) => {
       onSyms(symbols);
-      // Only subscribe to the user's selected symbol — no bulk preloading
-      const active = config?.activeSymbols?.[0] || (symbols[0]?.symbol) || 'R_100';
-      botEngine.activeSymbol = active;
-      derivApi.subscribeTick(active);
+      // Pre-populate pipSizeBySymbol in botEngine from active_symbols pip_size data
+      // so digit extraction is accurate even before the first live tick arrives
+      if (Array.isArray(symbols)) {
+        symbols.forEach(s => {
+          if (s.symbol && s.pipSize && !botEngine.pipSizeBySymbol.has(s.symbol)) {
+            botEngine.pipSizeBySymbol.set(s.symbol, s.pipSize);
+          }
+        });
+      }
     };
 
-    // Start the public WebSocket connection — subscriptions are queued until onopen fires
+    // Connect WebSocket and subscribe to the active symbol immediately on open
     derivApi.connectPublicWs().then(() => {
       setWsState(prev => ({ ...prev, connected: true }));
+      // Subscribe to the configured symbol right away
+      const active = config?.activeSymbols?.[0] || 'R_100';
+      botEngine.activeSymbol = active;
+      derivApi.subscribeTick(active);
     }).catch((err) => {
       console.warn('Public Deriv WS notice:', err);
       botEngine.seedHistoricalTicks(60);
@@ -292,15 +300,14 @@ export function App() {
 
     derivApi.on('onAuthorize', onAuth);
     derivApi.on('onBalance', onBal);
-    derivApi.on('onSymbols', onSymsWithSubscribe);
+    derivApi.on('onSymbols', onSymsUpdate);
     derivApi.on('onTick', onTick);
     derivApi.on('onTickHistory', onHist);
-
 
     return () => {
       derivApi.off('onAuthorize', onAuth);
       derivApi.off('onBalance', onBal);
-      derivApi.off('onSymbols', onSymsWithSubscribe);
+      derivApi.off('onSymbols', onSymsUpdate);
       derivApi.off('onTick', onTick);
       derivApi.off('onTickHistory', onHist);
     };

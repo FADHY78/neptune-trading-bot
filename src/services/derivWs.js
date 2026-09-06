@@ -109,67 +109,56 @@ export class DerivService {
 
   /**
    * Connect browser to Deriv WebSocket for zero-latency public market feed.
-   * Returns a promise that resolves once the socket is open.
-   * Concurrent callers all share the same connection attempt.
+   * Resolves once the socket is open. Concurrent callers share one attempt.
    */
   connectPublicWs() {
-    // Already open — nothing to do
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return Promise.resolve();
-    }
-
-    // Already connecting — share the same promise
-    if (this._connectionPromise) {
-      return this._connectionPromise;
-    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (this._connectionPromise) return this._connectionPromise;
 
     this._connectionPromise = new Promise((resolve, reject) => {
       const url = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
       this.ws = new WebSocket(url);
 
-      const onOpen = () => {
+      this.ws.onopen = () => {
         this.connected = true;
         this._connectionPromise = null;
         this.emit('onConnect', { appId: '1089', publicFeed: true });
 
-        // Fetch active symbols so we can validate subscriptions
-        this.fetchActiveSymbols().then(() => {
-          // Replay any subscriptions that were queued before connection was ready
-          const queued = this._pendingSubscriptions || [];
-          this._pendingSubscriptions = [];
-          queued.forEach(sym => this.subscribeTick(sym));
-        });
+        // Replay queued subscriptions IMMEDIATELY — don't wait for active_symbols
+        const queued = this._pendingSubscriptions || [];
+        this._pendingSubscriptions = [];
+        queued.forEach(sym => this._doSubscribe(sym));
+
+        // Fetch active symbols in background (for UI display only)
+        this.fetchActiveSymbols();
 
         resolve();
       };
 
-      const onClose = () => {
+      this.ws.onclose = () => {
         this.connected = false;
         this._connectionPromise = null;
-        // Auto-reconnect after 3 s and re-subscribe to the active symbol
+        // Auto-reconnect after 3s, re-subscribe last symbol
         setTimeout(() => {
           this.connectPublicWs().then(() => {
-            const sym = this._lastSubscribedSymbol;
-            if (sym) this.subscribeTick(sym);
+            if (this._lastSubscribedSymbol) {
+              this._doSubscribe(this._lastSubscribedSymbol);
+            }
           });
         }, 3000);
       };
 
-      const onError = (err) => {
-        console.warn('Public Deriv WS feed notice:', err);
+      this.ws.onerror = (err) => {
+        console.warn('[DerivWS] WebSocket error:', err);
         this._connectionPromise = null;
         reject(err);
       };
 
-      this.ws.onopen = onOpen;
-      this.ws.onclose = onClose;
-      this.ws.onerror = onError;
       this.ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          this.handleMessage(data);
+          this.handleMessage(JSON.parse(event.data));
         } catch (e) {
-          console.error('Error handling Deriv WS message:', e);
+          console.error('[DerivWS] Message parse error:', e);
         }
       };
     });
@@ -391,22 +380,28 @@ export class DerivService {
 
   async fetchActiveSymbols() {
     try {
-      const res = await this.send({
-        active_symbols: 'brief',
-        product_type: 'basic'
-      });
+      // Deriv API: active_symbols request (no product_type needed for brief)
+      const res = await this.send({ active_symbols: 'brief' });
 
-      if (res && res.active_symbols) {
-        // Filter synthetic & available volatility / jump / crash symbols
+      if (res && Array.isArray(res.active_symbols) && res.active_symbols.length > 0) {
+        // Map correct Deriv API field names (from the API docs):
+        //   underlying_symbol      → the tradeable symbol code (e.g. "1HZ100V", "R_100")
+        //   underlying_symbol_name → human display name
+        //   pip_size               → minimum price fluctuation (used for digit extraction)
+        //   exchange_is_open       → 1 = open, 0 = closed
         const symbols = res.active_symbols.map(s => ({
-          symbol: s.symbol,
-          name: s.display_name,
+          symbol: s.underlying_symbol,
+          name: s.underlying_symbol_name,
           market: s.market,
-          marketDisplayName: s.market_display_name,
           submarket: s.submarket,
-          submarketDisplayName: s.submarket_display_name,
-          category: s.submarket_display_name || s.market_display_name || 'Synthetics',
-          isOpen: Boolean(s.exchange_is_open)
+          category: s.submarket || s.market || 'Synthetics',
+          isOpen: s.exchange_is_open === 1,
+          isSuspended: s.is_trading_suspended === 1,
+          // pip_size from Deriv is the raw fluctuation (e.g. 0.01)
+          // Convert to decimal places count: 0.01→2, 0.001→3, 0.0001→4
+          pipSize: s.pip_size < 1
+            ? Math.round(-Math.log10(Number(s.pip_size) || 0.01))
+            : 2
         }));
 
         this.availableSymbols = symbols;
@@ -414,10 +409,11 @@ export class DerivService {
         return symbols;
       }
     } catch (e) {
-      console.warn('Could not fetch active symbols, using fallback catalog:', e);
+      console.warn('[DerivWS] fetchActiveSymbols failed:', e.message || e);
     }
     return [];
   }
+
 
   async switchAccount(targetLoginId, targetToken = null) {
     // If a token is provided directly, authorize with it
@@ -478,59 +474,41 @@ export class DerivService {
   }
 
   /**
-   * Subscribe to live ticks for a symbol.
-   * - Automatically remaps 1HZ* symbols to R_* equivalents (1HZ requires a registered app_id).
-   * - Validates against active_symbols before subscribing.
-   * - On "Symbol is invalid" error, auto-falls back to the first available R_* symbol.
+   * Public entry point: remap 1HZ->R_*, queue if not yet connected, then subscribe.
    */
   async subscribeTick(symbol, count = 300) {
-    // ── Step 1: Remap 1HZ* -> R_* (1s-interval symbols require a registered app_id) ──
+    // Remap 1HZ* -> R_* (1s symbols require a registered app_id)
     const HZ_TO_R = {
-      '1HZ10V': 'R_10', '1HZ15V': 'R_10', '1HZ25V': 'R_25', '1HZ30V': 'R_25',
-      '1HZ50V': 'R_50', '1HZ75V': 'R_75', '1HZ90V': 'R_75',
-      '1HZ100V': 'R_100', '1HZ150V': 'R_100', '1HZ250V': 'R_100'
+      '1HZ10V':'R_10','1HZ15V':'R_10','1HZ25V':'R_25','1HZ30V':'R_25',
+      '1HZ50V':'R_50','1HZ75V':'R_75','1HZ90V':'R_75',
+      '1HZ100V':'R_100','1HZ150V':'R_100','1HZ250V':'R_100'
     };
-    const resolvedSymbol = HZ_TO_R[symbol] || symbol;
-    if (resolvedSymbol !== symbol) {
-      console.info(`[DerivWS] Remapped ${symbol} → ${resolvedSymbol} (1HZ requires registered app_id)`);
+    const sym = HZ_TO_R[symbol] || symbol;
+    if (sym !== symbol) {
+      console.info(`[DerivWS] ${symbol} → ${sym} (remapped for public app_id)`);
     }
 
-    // ── Step 2: Queue if not yet connected ──
+    // Queue if socket not open yet
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       if (!this._pendingSubscriptions) this._pendingSubscriptions = [];
-      if (!this._pendingSubscriptions.includes(resolvedSymbol)) {
-        this._pendingSubscriptions.push(resolvedSymbol);
-      }
+      if (!this._pendingSubscriptions.includes(sym)) this._pendingSubscriptions.push(sym);
       this.connectPublicWs().catch(() => {});
       return;
     }
 
-    // ── Step 3: Validate against active_symbols list ──
-    let targetSymbol = resolvedSymbol;
-    if (this.availableSymbols && this.availableSymbols.length > 0) {
-      const valid = this.availableSymbols.some(s => s.symbol === targetSymbol);
-      if (!valid) {
-        // Try to find closest match (same market/submarket)
-        const fallback = this.availableSymbols.find(s =>
-          s.symbol.startsWith('R_') || s.market === 'synthetic_index'
-        );
-        if (fallback) {
-          console.warn(`[DerivWS] ${targetSymbol} not in active_symbols, falling back to ${fallback.symbol}`);
-          targetSymbol = fallback.symbol;
-        } else {
-          console.warn(`[DerivWS] ${targetSymbol} not in active_symbols — skipping.`);
-          return;
-        }
-      }
-    }
+    return this._doSubscribe(sym, count);
+  }
 
-    // ── Step 4: Track for auto-reconnect ──
-    this._lastSubscribedSymbol = targetSymbol;
-
+  /**
+   * Internal: actually send ticks_history + ticks subscribe requests.
+   * Called once the socket is confirmed open.
+   */
+  async _doSubscribe(symbol, count = 300) {
+    this._lastSubscribedSymbol = symbol;
     try {
-      // Fetch 300 historical ticks (fire and forget)
+      // Fetch 300 historical ticks (fire-and-forget; result handled in handleMessage)
       this.send({
-        ticks_history: targetSymbol,
+        ticks_history: symbol,
         adjust_start_time: 1,
         count: Number(count) || 300,
         end: 'latest',
@@ -538,37 +516,23 @@ export class DerivService {
         style: 'ticks'
       }).catch(() => {});
 
-      // Subscribe to live real-time tick stream
-      const res = await this.send({ ticks: targetSymbol, subscribe: 1 });
+      // Subscribe to live tick stream
+      const res = await this.send({ ticks: symbol, subscribe: 1 });
       if (res && res.subscription) {
-        this.activeSubscriptions.set(res.subscription.id, { type: 'tick', symbol: targetSymbol });
+        this.activeSubscriptions.set(res.subscription.id, { type: 'tick', symbol });
+        console.info(`[DerivWS] ✅ Subscribed to ${symbol} (id: ${res.subscription.id})`);
       }
       return res;
     } catch (e) {
-      const msg = e?.message || '';
-      if (msg.includes('invalid') || msg.includes('not available')) {
-        // Auto-fallback: try R_100 as the safest universal option
-        const safeSymbol = 'R_100';
-        if (targetSymbol !== safeSymbol) {
-          console.warn(`[DerivWS] ${targetSymbol} rejected by server, auto-fallback to ${safeSymbol}`);
-          this._lastSubscribedSymbol = safeSymbol;
-          try {
-            this.send({
-              ticks_history: safeSymbol,
-              adjust_start_time: 1, count: 300, end: 'latest', start: 1, style: 'ticks'
-            }).catch(() => {});
-            const fallbackRes = await this.send({ ticks: safeSymbol, subscribe: 1 });
-            if (fallbackRes && fallbackRes.subscription) {
-              this.activeSubscriptions.set(fallbackRes.subscription.id, { type: 'tick', symbol: safeSymbol });
-            }
-            return fallbackRes;
-          } catch (fe) {
-            console.warn(`[DerivWS] Fallback to ${safeSymbol} also failed:`, fe.message);
-          }
+      const msg = String(e?.message || '');
+      if (msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('not available')) {
+        // Fallback to R_100 if server rejects
+        if (symbol !== 'R_100') {
+          console.warn(`[DerivWS] ${symbol} rejected — falling back to R_100`);
+          return this._doSubscribe('R_100', count);
         }
-      } else {
-        console.warn(`[DerivWS] subscribeTick(${targetSymbol}):`, msg);
       }
+      console.warn(`[DerivWS] _doSubscribe(${symbol}):`, msg);
     }
   }
 

@@ -31,7 +31,8 @@ export class NeptuneBotEngine {
     this.lastTickTimeBySymbol = new Map();
     this.pipSizeBySymbol = new Map();       // pip size per symbol for correct digit extraction
     this.totalTicksBySymbol = new Map();    // running tick count per symbol
-    this.activeSymbol = '1HZ10V';
+    this.activeSymbol = 'R_100';            // default to public symbol (no registered app_id needed)
+
 
     
     // Terminal Logs
