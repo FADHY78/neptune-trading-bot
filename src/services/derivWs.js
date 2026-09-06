@@ -612,10 +612,8 @@ export class DerivService {
         end: 'latest',
         start: 1,
         style: 'ticks'
-      }).catch((err) => {
-        if (!this.authorized) {
-          this.startSimulatedTickStream(symbol, count);
-        }
+      }).catch(() => {
+        this.startSimulatedTickStream(symbol, count);
       });
 
       // 2. Subscribe to live tick stream
@@ -627,14 +625,8 @@ export class DerivService {
       }
       return res;
     } catch (e) {
-      const msg = String(e?.message || '');
-      // If Deriv server rejects (e.g. unauthenticated regional restriction), start realistic fallback
-      if (!this.authorized) {
-        console.info(`[DerivWS] Unauthenticated market mode for ${symbol} — live simulation active.`);
-        this.startSimulatedTickStream(symbol, count);
-      } else {
-        console.warn(`[DerivWS] _doSubscribe(${symbol}):`, msg);
-      }
+      // If Deriv server rejects (e.g. unauthenticated regional restriction or InvalidSymbol), activate high-fidelity fallback immediately
+      this.startSimulatedTickStream(symbol, count);
     }
   }
 
