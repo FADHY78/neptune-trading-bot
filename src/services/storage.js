@@ -11,7 +11,7 @@ export const DEFAULT_CONFIG = {
   takeProfit: 100,
   stopLoss: -100,
   maxConsecLoss: 4,
-  activeSymbols: ['1HZ100V'],
+  activeSymbols: ['R_100'],
   tradingLogic: 'analyze', // 'analyze', 'random', 'specific'
   selectedDigits: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
   forceSymbolSwitch: true,
@@ -51,6 +51,17 @@ export const loadStoredConfig = () => {
       } else {
         parsed.strategyId = 'differs-combo-9';
       }
+    }
+
+    // Migrate stored 1HZ* symbols to R_* equivalents — 1HZ symbols require
+    // a registered Deriv app_id and are not available via the public app_id=1089.
+    const HZ_TO_R = {
+      '1HZ10V': 'R_10', '1HZ15V': 'R_10', '1HZ25V': 'R_25',
+      '1HZ30V': 'R_25', '1HZ50V': 'R_50', '1HZ75V': 'R_75',
+      '1HZ90V': 'R_75', '1HZ100V': 'R_100', '1HZ150V': 'R_100', '1HZ250V': 'R_100'
+    };
+    if (parsed.activeSymbols && Array.isArray(parsed.activeSymbols)) {
+      parsed.activeSymbols = parsed.activeSymbols.map(s => HZ_TO_R[s] || s);
     }
 
     return { ...DEFAULT_CONFIG, ...parsed };
