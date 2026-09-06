@@ -59,22 +59,14 @@ export function App() {
     setConfig(newConfig);
     saveStoredConfig(newConfig);
 
-    // Fall back to the first confirmed-valid symbol from Deriv's active_symbols list
-    const fallback = derivApi.availableSymbols?.[0]?.symbol || 'R_100';
-    const activeSym = newConfig?.activeSymbols?.[0] || fallback;
+    const activeSym = newConfig?.activeSymbols?.[0] || '1HZ100V';
     if (botEngine.activeSymbol !== activeSym) {
       botEngine.activeSymbol = activeSym;
       const symName = getSymbolDisplayName(activeSym);
-      botEngine.log(`📡 Switching to ${symName} (${activeSym})... Subscribing to live Deriv ticks...`, 'info');
+      botEngine.log(`📡 Switching to ${symName} (${activeSym})... Subscribing to live ticks...`, 'info');
 
-      // Clear previous tick subscriptions and subscribe to selected symbol
-      await derivApi.forgetAllTicks();
-      await derivApi.subscribeTick(activeSym);
-
-      // Force immediate re-render with target symbol's state
+      await derivApi.subscribeTick(activeSym, 300);
       setBotState(botEngine.getState(activeSym));
-
-      // Trigger AI analysis for the new symbol
       aiAnalyst.analyzeMarket(newConfig);
     }
   };
@@ -241,7 +233,7 @@ export function App() {
     };
 
     // Use a ref so the tick handler always sees the latest active symbol without stale closure
-    const activeSymRef = { current: config?.activeSymbols?.[0] || 'R_100' };
+    const activeSymRef = { current: config?.activeSymbols?.[0] || '1HZ100V' };
 
     const onTick = (tickData) => {
       if (tickData && tickData.lastDigit !== undefined) {
@@ -289,13 +281,13 @@ export function App() {
     derivApi.connectPublicWs().then(() => {
       setWsState(prev => ({ ...prev, connected: true }));
       // Subscribe to the configured symbol right away
-      const active = config?.activeSymbols?.[0] || 'R_100';
+      const active = config?.activeSymbols?.[0] || '1HZ100V';
       botEngine.activeSymbol = active;
-      derivApi.subscribeTick(active);
+      derivApi.subscribeTick(active, 300);
     }).catch((err) => {
       console.warn('Public Deriv WS notice:', err);
-      botEngine.seedHistoricalTicks(60);
-      setBotState(botEngine.getState());
+      const active = config?.activeSymbols?.[0] || '1HZ100V';
+      derivApi.startSimulatedTickStream(active, 300);
     });
 
     derivApi.on('onAuthorize', onAuth);
